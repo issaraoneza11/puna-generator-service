@@ -1,19 +1,29 @@
-FROM node:20.11.1-alpine
+FROM node:20.11.1-slim
 
+# ป้องกัน interactive mode
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ติดตั้ง LibreOffice + ฟอนต์ไทย + timezone
+RUN apt-get update && \
+    apt-get install -y libreoffice libreoffice-writer libreoffice-calc libreoffice-impress && \
+    apt-get install -y fonts-thai-tlwg tzdata && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ตั้ง timezone
+ENV TZ=Asia/Bangkok
+
+# โฟลเดอร์โปรเจค
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
 
-# timezone (Alpine)
-RUN apk add --no-cache tzdata
-ENV TZ=Asia/Bangkok
-
-# คัดลอกซอร์ส
+# คัดลอกโปรเจคทั้งหมด
 COPY . .
 
-# ติดตั้ง deps รวม devDeps + เปิดสิทธิ์เฉพาะที่คำสั่ง (npm v10 ไม่มี config unsafe-perm)
+# ติดตั้ง dependencies
 RUN npm install --legacy-peer-deps --include=dev --unsafe-perm
 
-# (ถ้าใช้ webpack/nodemon ใน npm start ต้องอยู่ใน devDeps แล้ว)
+# ตั้งค่า environment
 ENV START_PROJECT=development
 
+# เริ่มโปรเจค
 CMD ["npm", "start"]
