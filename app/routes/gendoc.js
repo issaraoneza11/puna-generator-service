@@ -33,12 +33,21 @@ function replaceTokensInCell(cell, data) {
 
     let hasArrayToken = false;
 
+    // แทนค่า {{ key }}
     cell.value = cell.value.replace(/{{\s*([\w.[\]0-9]+)\s*}}/g, (_, k) => {
-        if (/\[\d+\]/.test(k)) hasArrayToken = true;
+        if (/\[\d+\]/.test(k)) hasArrayToken = true;  // เจอ array token
         return String(get(data, k));
     });
 
+    // ⭐ wrapText เฉพาะกรณี array (มี arr[0], arr[1], ...)
     if (hasArrayToken) {
+        cell.alignment = {
+            ...(cell.alignment || {}),
+            wrapText: true,
+            vertical: 'top',      // ทำให้ดูดีขึ้น เวลามีหลายบรรทัด
+        };
+
+        // cell ที่เป็น array ก็ทำ border ด้วย
         cell.border = {
             top: { style: 'thin' },
             left: { style: 'thin' },
@@ -47,7 +56,6 @@ function replaceTokensInCell(cell, data) {
         };
     }
 }
-
 function mapOrientation(input) {
     const v = String(input || '').toLowerCase();
     if (v === 'p' || v === 'portrait') return 'portrait';
@@ -83,6 +91,7 @@ function expandArrayRows(ws, data) {
             newRow.eachCell(cell => {
                 if (typeof cell.value === 'string') {
                     cell.value = cell.value.replace(/\[0\]/g, `[${i}]`);
+                    cell.font = { name: 'TH SarabunPSK' };
                 }
             });
         }
@@ -99,7 +108,7 @@ async function fillXlsx(tplPath, data) {
     const defaultOpt = {
         paperSize: 'A4',
         orientation: 'portrait',
-        margin: 0,
+        margin: 0, // รองรับค่า default เป็นตัวเลขอยู่เหมือนเดิม
         pageNumber: true,
         pageNumberPosition: 'bottom-center',
         repeatHeaderRows: '',
@@ -113,14 +122,34 @@ async function fillXlsx(tplPath, data) {
         ws.pageSetup.paperSize = paperMap[opt.paperSize] || 9;
         ws.pageSetup.orientation = mapOrientation(opt.orientation);
 
-        const m = opt.margin ?? 0;
+        // ----------------------
+        // รองรับ margin ทั้งแบบตัวเดียว และแบบ object 4 ด้าน
+        // ----------------------
+        const margin = opt.margin ?? 0;
+
+        let marginLeft, marginRight, marginTop, marginBottom;
+
+        if (margin && typeof margin === 'object') {
+            // แบบละเอียด: { left, right, top, bottom }
+            marginLeft = Number(margin.left ?? 0) || 0;
+            marginRight = Number(margin.right ?? 0) || 0;
+            marginTop = Number(margin.top ?? 0) || 0;
+            marginBottom = Number(margin.bottom ?? 0) || 0;
+        } else {
+            // แบบตัวเดียว: margin: 0.2
+            const m = Number(margin) || 0;
+            marginLeft = marginRight = marginTop = marginBottom = m;
+        }
+
         ws.pageSetup.margins = {
-            left: m,
-            right: m,
-            top: m,
-            bottom: m,
-            header: Math.max(m, 0.3),
-            footer: Math.max(m, 1),
+            left: marginLeft,
+            right: marginRight,
+            top: marginTop,
+            bottom: marginBottom,
+
+            // header / footer ใส่ขั้นต่ำกัน LibreOffice งอแง
+            header: Math.max(marginTop, 0.3),
+            footer: Math.max(marginBottom, 1),
         };
 
         if (opt.repeatHeaderRows) {
@@ -141,11 +170,16 @@ async function fillXlsx(tplPath, data) {
                 'bottom-right': 'oddFooter',
             };
 
-            const side = pos.includes('top') ? pos : pos;
             const field = map[pos];
-            const align = pos.includes('left') ? '&L' : pos.includes('right') ? '&R' : '&C';
+            const align = pos.includes('left')
+                ? '&L'
+                : pos.includes('right')
+                    ? '&R'
+                    : '&C';
 
-            ws.headerFooter[field] = `${align}${label}`;
+            if (field) {
+                ws.headerFooter[field] = `${align}${label}`;
+            }
         }
 
         expandArrayRows(ws, data);
@@ -157,6 +191,7 @@ async function fillXlsx(tplPath, data) {
     await wb.xlsx.writeFile(outXlsx);
     return outXlsx;
 }
+
 
 // -------------------------------------------------------
 // convert to pdf
@@ -239,13 +274,19 @@ router.get('/schema', async (req, res) => {
             "__options": {
                 paperSize: "A4",
                 orientation: "p",
-                margin: 0,
+                margin: {
+                    "left": 0,
+                    "right": 0,
+                    "top": 0,
+                    "bottom": 0
+                },
                 /* pageNumber: true, */
                 pageNumberPosition: "bottom-center",
                 repeatHeaderRows: "",
             },
             data: {}
         };
+
 
         res.json(finalSchema);
     } catch (e) {
@@ -311,7 +352,12 @@ router.post('/schema/upload', async (req, res) => {
             __options: {
                 paperSize: 'A4',
                 orientation: 'p',
-                margin: 0,
+                margin: {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
                 pageNumber: true,
                 pageNumberPosition: 'bottom-center',
                 repeatHeaderRows: '',
