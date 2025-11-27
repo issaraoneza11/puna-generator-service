@@ -287,7 +287,7 @@ router.get('/health', (req, res) => {
 router.get('/schema', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if(!permission){
            throw Error('No Permission');
         }
@@ -324,7 +324,7 @@ router.get('/schema', async (req, res) => {
 router.post('/render', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if(!permission){
            throw Error('No Permission');
         }
@@ -362,7 +362,7 @@ router.post('/render', async (req, res) => {
 router.post('/schema/upload', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if(!permission){
            throw Error('No Permission');
         }
