@@ -9,8 +9,8 @@ const Excel = require('exceljs');
 
 function checkPermissionUrl(url){
     let arr_permission = [
-        'http://localhost:3000',
-        'http://localhost:5173'
+        'http://localhost:3000/',
+        'http://localhost:5173/'
     ];
 
     let check = arr_permission.filter((e)=>{return e == url});
@@ -278,6 +278,11 @@ router.get('/health', (req, res) => {
 
 router.get('/schema', async (req, res) => {
     try {
+        const referer = req.get('Referer');  // หรือ req.headers.referer
+        let permission = checkPermissionUrl(referer);
+        if(!permission){
+           throw Error('No Permission');
+        }
         /* if (!fs.existsSync(TEMPLATE_XLSX)) {
             return res.status(500).json({ error: 'Template missing' });
         }
@@ -310,6 +315,11 @@ router.get('/schema', async (req, res) => {
 
 router.post('/render', async (req, res) => {
     try {
+        const referer = req.get('Referer');  // หรือ req.headers.referer
+        let permission = checkPermissionUrl(referer);
+        if(!permission){
+           throw Error('No Permission');
+        }
         const raw = req.body || {};
         const data = Array.isArray(raw) ? { items: raw } : raw;
 
@@ -343,6 +353,11 @@ router.post('/render', async (req, res) => {
 // รับไฟล์ Excel แล้วคืน schema + templateId
 router.post('/schema/upload', async (req, res) => {
     try {
+        const referer = req.get('Referer');  // หรือ req.headers.referer
+        let permission = checkPermissionUrl(referer);
+        if(!permission){
+           throw Error('No Permission');
+        }
         // ถ้าใช้ express-fileupload ใน app.js มันจะยัดไฟล์ไว้ที่นี่
         if (!req.files || !req.files.file) {
             return res.status(400).json({ error: 'No file uploaded' });
