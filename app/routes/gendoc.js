@@ -190,9 +190,11 @@ function replaceTokensInCell(cell, data) {
 
     let hasArrayToken = false;
 
-    // จัดการทุก {{ ... }} ใน cell เดียว
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        // inner เช่น "customer_name|hl|b" หรือ "style|w|b|hl"
+        // inner เช่น:
+        // - "customer_name|hl|b"
+        // - "style|w|b|hl"
+        // - "fx|sum|qty|price"
         const parts = inner.split('|').map(s => s.trim());
         const nonEmpty = parts.filter(Boolean);
         if (nonEmpty.length === 0) return '';
@@ -200,16 +202,33 @@ function replaceTokensInCell(cell, data) {
         const key = nonEmpty[0];
         const styleTokens = nonEmpty.slice(1);
 
-        // เคสพิเศษ: {{style|...}} → คุมสไตล์ทั้ง cell
+        // -----------------------
+        // 1) style: {{style|...}}
+        // -----------------------
         if (key.toLowerCase() === 'style') {
             if (styleTokens.length > 0) {
                 applyInlineStyle(cell, styleTokens);
             }
-            // ไม่ให้คำว่า style โผล่ในผลลัพธ์
             return '';
         }
 
-        // ปกติ: key = data path เช่น customer_name, goog[0].no
+        // -----------------------
+        // 2) fx: {{fx|sum|...}}, {{fx|if|...}}
+        // -----------------------
+        if (key.toLowerCase() === 'fx') {
+            const result = evalFxFormula(styleTokens, data);
+
+            // ถ้าในสูตรมี array path เช่น goog[0].qty
+            if (styleTokens.some(t => /\[\d+\]/.test(t))) {
+                hasArrayToken = true;
+            }
+
+            return String(result ?? '');
+        }
+
+        // -----------------------
+        // 3) ปกติ: key = data path เช่น customer_name, goog[0].no
+        // -----------------------
         const keyPath = key;
 
         if (/\[\d+\]/.test(keyPath)) hasArrayToken = true;
@@ -218,7 +237,6 @@ function replaceTokensInCell(cell, data) {
         return v;
     });
 
-    // ถ้า cell นี้มี array token (goog[0].xxx) → คุม wrap+border เหมือนเดิม
     if (hasArrayToken) {
         cell.alignment = {
             ...(cell.alignment || {}),
@@ -232,6 +250,155 @@ function replaceTokensInCell(cell, data) {
             right: { style: 'thin' },
         };
     }
+}
+
+function isQuoted(str) {
+    return /^(['"]).*\1$/.test(str);
+}
+
+function stripQuotes(str) {
+    const m = str.match(/^(['"])(.*)\1$/);
+    return m ? m[2] : str;
+}
+
+function resolveTokenValue(token, data) {
+    if (token == null) return '';
+
+    const trimmed = token.trim();
+    if (!trimmed) return '';
+
+    // ถ้าใส่ "..." หรือ '...' → เป็น literal ตรง ๆ
+    if (isQuoted(trimmed)) {
+        return stripQuotes(trimmed);
+    }
+
+    // อย่างอื่น treat เป็น key path
+    return get(data, trimmed);
+}
+function setByPath(obj, pathStr, value) {
+    if (!pathStr) return;
+    const normalized = pathStr.replace(/\[(\d+)\]/g, '.$1');
+    const parts = normalized.split('.').filter(Boolean);
+    if (!parts.length) return;
+
+    let o = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const k = parts[i];
+        if (o[k] == null || typeof o[k] !== 'object') {
+            o[k] = {};
+        }
+        o = o[k];
+    }
+    o[parts[parts.length - 1]] = value;
+}
+
+function evalFxFormula(tokens, data) {
+    if (!tokens || tokens.length === 0) return '';
+
+    // แยก core tokens กับ as:alias ออกจากกันก่อน
+    let asPath = null;
+    const coreTokens = [];
+
+    for (const t of tokens) {
+        const s = String(t || '').trim();
+        if (!s) continue;
+
+        if (s.toLowerCase().startsWith('as:')) {
+            const alias = s.slice(3).trim();
+            if (alias) asPath = alias;
+        } else {
+            coreTokens.push(s);
+        }
+    }
+
+    if (coreTokens.length === 0) return '';
+
+    const cmd = String(coreTokens[0] || '').toLowerCase();
+    const args = coreTokens.slice(1);
+
+    let result = '';
+
+    // -----------------------------
+    // fx|sum|qty|price|fee
+    // -----------------------------
+    if (cmd === 'sum') {
+        let total = 0;
+        let any = false;
+
+        for (const path of args) {
+            const v = resolveTokenValue(path, data);
+            const n = Number(v);
+            if (Number.isFinite(n)) {
+                total += n;
+                any = true;
+            }
+        }
+        result = any ? total : '';
+    }
+
+    // -----------------------------
+    // fx|if|qty|==|0|"ไม่มี"| "มี"
+    // หรือ  fx|if|qty|0|"ไม่มี"| "มี"  (op default ==)
+    // -----------------------------
+    else if (cmd === 'if') {
+        if (args.length >= 1) {
+            const leftToken = args[0];
+            let op = args[1];
+            let rightToken;
+            let thenToken;
+            let elseToken;
+
+            if (['==', '!=', '>', '>=', '<', '<='].includes(op)) {
+                rightToken = args[2];
+                thenToken = args[3];
+                elseToken = args[4];
+            } else {
+                rightToken = op;
+                op = '==';
+                thenToken = args[2];
+                elseToken = args[3];
+            }
+
+            const leftValRaw = resolveTokenValue(leftToken, data);
+            const rightValRaw = resolveTokenValue(rightToken, data);
+
+            const leftNum = Number(leftValRaw);
+            const rightNum = Number(rightValRaw);
+            const bothNum = Number.isFinite(leftNum) && Number.isFinite(rightNum);
+
+            let cond = false;
+
+            if (bothNum) {
+                switch (op) {
+                    case '==': cond = leftNum === rightNum; break;
+                    case '!=': cond = leftNum !== rightNum; break;
+                    case '>': cond = leftNum > rightNum; break;
+                    case '>=': cond = leftNum >= rightNum; break;
+                    case '<': cond = leftNum < rightNum; break;
+                    case '<=': cond = leftNum <= rightNum; break;
+                }
+            } else {
+                const L = String(leftValRaw ?? '');
+                const R = String(rightValRaw ?? '');
+                switch (op) {
+                    case '==': cond = L === R; break;
+                    case '!=': cond = L !== R; break;
+                }
+            }
+
+            const chosen = cond ? thenToken : elseToken;
+            result = chosen == null ? '' : resolveTokenValue(chosen, data);
+        }
+    }
+
+    // ถ้ายังไม่รู้จักสูตรอื่น → ปล่อย result เป็น '' ไป
+
+    // ถ้ามี as:xxx → เขียนค่าลง data ด้วย
+    if (asPath) {
+        setByPath(data, asPath, result);
+    }
+
+    return result;
 }
 
 function mapOrientation(input) {
@@ -479,6 +646,7 @@ function hexToRgb(hex) {
 // Schema builder
 // -------------------------------------------------------
 async function buildSchemaFromTemplate(tplPath) {
+
     const wb = new Excel.Workbook();
     await wb.xlsx.readFile(tplPath);
 
@@ -499,6 +667,7 @@ async function buildSchemaFromTemplate(tplPath) {
         ws.eachRow(row =>
             row.eachCell(cell => {
                 if (typeof cell.value !== 'string') return;
+
                 const re = /{{\s*([^{}]+?)\s*}}/g;
                 let m;
                 while ((m = re.exec(cell.value))) {
@@ -508,17 +677,61 @@ async function buildSchemaFromTemplate(tplPath) {
                     if (nonEmpty.length === 0) continue;
 
                     const key = nonEmpty[0];
-
+                    const rest = nonEmpty.slice(1);
+                    if (key.toLowerCase().startsWith('as:')) {
+                        continue;
+                    }
                     // ข้าม style: {{style|...}}
                     if (key.toLowerCase() === 'style') {
                         continue;
                     }
 
+                    // fx: ดึง key ที่เป็น path จาก arg
+                    if (key.toLowerCase() === 'fx') {
+                        /*       const cmd = (rest[0] || '').toLowerCase();
+                              const args = rest.slice(1);
+      
+                              if (cmd === 'sum') {
+                                  // fx|sum|qty|price|fee|as:goog[0].total
+                                  for (let tok of args) {
+                                      if (!tok) continue;
+                                      tok = tok.trim();
+                                      if (!tok) continue;
+      
+                                      // 👇 ข้าม alias
+                                      if (tok.toLowerCase().startsWith('as:')) continue;
+      
+                                      // ถ้าไม่ใช่ literal string → ถือว่าเป็น key path
+                                      if (!isQuoted(tok)) {
+                                          addKey(schema, tok);
+                                      }
+                                  }
+                              } else if (cmd === 'if') {
+                                  // fx|if|qty|==|0|"ไม่มี"| "มี"|as:status
+                                  if (args.length >= 1) {
+                                      let left = args[0];
+                                      if (left) {
+                                          left = left.trim();
+                                          if (left && !left.toLowerCase().startsWith('as:') && !isQuoted(left)) {
+                                              addKey(schema, left);
+                                          }
+                                      }
+                                      // ถ้าอนาคตอยากดึง key จาก then/else ก็เพิ่มเหมือนด้านบนได้
+                                  }
+                              } */
+
+                        continue;
+                    }
+
+
+
+                    // ปกติ: {{ customer_name }} , {{ goog[0].qty }}
                     addKey(schema, key);
                 }
             })
         );
     });
+
 
     return schema;
 }
@@ -535,7 +748,7 @@ router.get('/health', (req, res) => {
 router.get('/schema', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
         }
@@ -572,7 +785,7 @@ router.get('/schema', async (req, res) => {
 router.post('/render', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
         }
@@ -626,7 +839,7 @@ router.post('/render', async (req, res) => {
 router.post('/schema/upload', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
-        let permission = checkPermissionUrl(referer);
+        let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
         }
