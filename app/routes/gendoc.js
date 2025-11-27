@@ -72,6 +72,7 @@ function applyInlineStyle(cell, styleTokens) {
     let hAlign = null;
     let vAlign = null;
     let color = null;
+    let fontSize = null;   // 👈 เพิ่มตัวแปรเก็บ size
 
     for (const raw of styleTokens) {
         const t = raw.trim();
@@ -80,89 +81,51 @@ function applyInlineStyle(cell, styleTokens) {
         const tk = t.toLowerCase();
 
         // wrapText
-        if (tk === 'w') {
-            wrap = true;
-            continue;
-        }
-        if (tk === 'nw') {
-            wrap = false;
-            continue;
-        }
+        if (tk === 'w') { wrap = true; continue; }
+        if (tk === 'nw') { wrap = false; continue; }
 
-        // bold
-        if (tk === 'b') {
-            bold = true;
-            continue;
-        }
-        if (tk === 'nb') {
-            bold = false;
-            continue;
-        }
+        // bold / italic / underline
+        if (tk === 'b') { bold = true; continue; }
+        if (tk === 'nb') { bold = false; continue; }
+        if (tk === 'i') { italic = true; continue; }
+        if (tk === 'ni') { italic = false; continue; }
+        if (tk === 'u') { underline = true; continue; }
+        if (tk === 'nu') { underline = false; continue; }
 
-        // italic
-        if (tk === 'i') {
-            italic = true;
-            continue;
-        }
-        if (tk === 'ni') {
-            italic = false;
-            continue;
-        }
+        // horizontal align
+        if (tk === 'hl') { hAlign = 'left'; continue; }
+        if (tk === 'hc') { hAlign = 'center'; continue; }
+        if (tk === 'hr') { hAlign = 'right'; continue; }
 
-        // underline
-        if (tk === 'u') {
-            underline = true;
-            continue;
-        }
-        if (tk === 'nu') {
-            underline = false;
-            continue;
-        }
+        // vertical align
+        if (tk === 'vt') { vAlign = 'top'; continue; }
+        if (tk === 'vm') { vAlign = 'middle'; continue; }
+        if (tk === 'vb') { vAlign = 'bottom'; continue; }
 
-        // horizontal align: hl / hc / hr
-        if (tk === 'hl') {
-            hAlign = 'left';
-            continue;
-        }
-        if (tk === 'hc') {
-            hAlign = 'center';
-            continue;
-        }
-        if (tk === 'hr') {
-            hAlign = 'right';
-            continue;
-        }
-
-        // vertical align: vt / vm / vb
-        if (tk === 'vt') {
-            vAlign = 'top';
-            continue;
-        }
-        if (tk === 'vm') {
-            vAlign = 'middle';
-            continue;
-        }
-        if (tk === 'vb') {
-            vAlign = 'bottom';
-            continue;
-        }
-
-        // color: #RRGGBB หรือ #RGB
+        // color
         if (/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(tk)) {
             const hex = tk.slice(1).toUpperCase();
-            const fullHex =
-                hex.length === 3
-                    ? hex.split('').map(ch => ch + ch).join('')
-                    : hex;
+            const fullHex = hex.length === 3
+                ? hex.split('').map(ch => ch + ch).join('')
+                : hex;
             color = fullHex;
             continue;
         }
 
-        // token ไม่รู้จัก → ข้าม
+        // 🔹 font size: fs:14 หรือ FS:18
+        if (tk.startsWith('fs:')) {
+            const n = Number(tk.slice(3));
+            if (Number.isFinite(n) && n > 0) {
+                fontSize = n;
+            }
+            continue;
+        }
+
+        // token อื่นไม่รู้จัก → ข้าม
     }
 
-    // apply font
-    if (bold !== null || italic !== null || underline !== null || color) {
+    // apply font รวม size ด้วย
+    if (bold !== null || italic !== null || underline !== null || color || fontSize !== null) {
         const oldFont = cell.font || {};
         cell.font = {
             ...oldFont,
@@ -170,6 +133,7 @@ function applyInlineStyle(cell, styleTokens) {
             ...(italic !== null ? { italic } : {}),
             ...(underline !== null ? { underline } : {}),
             ...(color ? { color: { argb: 'FF' + color } } : {}),
+            ...(fontSize !== null ? { size: fontSize } : {}),
         };
     }
 
@@ -418,22 +382,16 @@ function expandArrayRows(ws, data) {
 
         row.eachCell(cell => {
             if (typeof cell.value !== 'string') return;
-
-            // หา token แรกใน {{ ... }}
             const m = cell.value.match(/{{\s*([^{}]+?)\s*}}/);
             if (!m) return;
 
-            const inner = m[1]; // เช่น "goog[0].name|hl|b"
+            const inner = m[1];
             const parts = inner.split('|').map(s => s.trim()).filter(Boolean);
             if (!parts.length) return;
 
-            const key = parts[0]; // เช่น "goog[0].name"
-
-            // ดึงชื่อ array จาก key เช่น goog[0].name -> goog
+            const key = parts[0];
             const mm = key.match(/^(\w+)\[0\]\./);
-            if (mm) {
-                arrayName = mm[1]; // "goog"
-            }
+            if (mm) arrayName = mm[1];
         });
 
         if (!arrayName) continue;
@@ -447,15 +405,27 @@ function expandArrayRows(ws, data) {
             const newRow = ws.insertRow(rowNum + i, []);
             newRow.values = templateValues;
 
-            newRow.eachCell(cell => {
+            // 🟢 ก๊อป style จาก row template มาด้วย
+            row.eachCell({ includeEmpty: true }, (tmplCell, col) => {
+                const cell = newRow.getCell(col);
+
+                // copy style ทั้งก้อน (font, border, fill, alignment ฯลฯ)
+                cell.style = { ...tmplCell.style };
+
                 if (typeof cell.value === 'string') {
                     cell.value = cell.value.replace(/\[0\]/g, `[${i}]`);
-                    cell.font = { name: 'TH SarabunPSK' };
+                    // ถ้าตัวอยากบังคับฟอนต์เป็น TH Sarabun ก็ทำแบบ merge ไม่ใช่ทับหมด
+                    if (cell.font) {
+                        cell.font = { ...cell.font, name: 'TH SarabunPSK' };
+                    } else {
+                        cell.font = { name: 'TH SarabunPSK' };
+                    }
                 }
             });
         }
     }
 }
+
 
 
 // -------------------------------------------------------
