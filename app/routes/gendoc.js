@@ -1,25 +1,33 @@
 const express = require('express');
 const router = express.Router();
-
+const databaseContextPg = require("database-context-pg");
+const connectionSetting = require("../dbconnect");
+const connectionConfig = connectionSetting.config;
+const condb = new databaseContextPg(connectionConfig);
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const Excel = require('exceljs');
 
-function checkPermissionUrl(url){
+async function checkPermissionUrl(url){
     let arr_permission = [
         'http://localhost:3000/',
         'http://localhost:5173/'
     ];
+    let check = await condb.clientQuery(`SELECT pu_id, pu_url, pu_key, pu_is_active
+	FROM public.permission_url WHERE pu_is_active = true AND pu_url = $1`,[url]);
 
-    let check = arr_permission.filter((e)=>{return e == url});
-    if(check.length > 0){
+   /*  console.log('check',check.rows); */
+    
+
+    if(check.rows.length > 0){
         return true;
     }else{
         return false;
     }
 }
+
 
 
 // template เดิม (ยังอยู่ไปก่อน)
