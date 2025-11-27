@@ -10,7 +10,7 @@ const Excel = require('exceljs');
 function checkPermissionUrl(url){
     let arr_permission = [
         'http://localhost:3000/',
-        'http://localhost:51734/'
+        'http://localhost:5173/'
     ];
 
     let check = arr_permission.filter((e)=>{return e == url});
