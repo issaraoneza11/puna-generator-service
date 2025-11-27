@@ -5,7 +5,9 @@ var cookieParser = require("cookie-parser");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 var morgan = require("morgan");
-var fs = require("fs");
+const fs = require('fs');
+const os = require('os');
+
 const rfs = require("rotating-file-stream");
 const basicAuth = require("express-basic-auth");
 const _config = require("./appSetting.js");
@@ -33,9 +35,51 @@ app.use(
   })
 );
 
+const TEMPLATE_LIFETIME_MS = 3 * 60 * 60 * 1000; // 3 ชั่วโมง
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;      // 10 นาที
 
+function cleanupOldTemplates() {
+  const dir = os.tmpdir();
+  const now = Date.now();
 
+  fs.readdir(dir, (err, files) => {
+    if (err) {
+      console.error('[CLEANUP] readdir error:', err.message);
+      return;
+    }
 
+    files.forEach(file => {
+      // ลบเฉพาะไฟล์ template ที่เราสร้างเอง
+      if (!file.startsWith('tpl_') || !file.endsWith('.xlsx')) return;
+
+      const full = path.join(dir, file);
+
+      fs.stat(full, (err, stat) => {
+        if (err) {
+          console.error('[CLEANUP] stat error:', err.message);
+          return;
+        }
+
+        const age = now - stat.mtimeMs; // อายุไฟล์(ms) จากเวลาแก้ไขล่าสุด
+        if (age > TEMPLATE_LIFETIME_MS) {
+          fs.unlink(full, err => {
+            if (err) {
+              console.error('[CLEANUP] unlink error:', err.message);
+            } else {
+              console.log('[CLEANUP] deleted old template:', full);
+            }
+          });
+        }
+      });
+    });
+  });
+}
+
+// ยิงตอน start ทีนึง
+cleanupOldTemplates();
+
+// แล้วตั้งให้ยิงทุก 10 นาที
+setInterval(cleanupOldTemplates, CLEANUP_INTERVAL_MS);
 
 
 app.set("views", path.join(__dirname, "views"));
