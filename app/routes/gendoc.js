@@ -6,17 +6,17 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const Excel = require('exceljs');
-
-function checkPermissionUrl(url){
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+function checkPermissionUrl(url) {
     let arr_permission = [
         'http://localhost:3000/',
         'http://localhost:5173/'
     ];
 
-    let check = arr_permission.filter((e)=>{return e == url});
-    if(check.length > 0){
+    let check = arr_permission.filter((e) => { return e == url });
+    if (check.length > 0) {
         return true;
-    }else{
+    } else {
         return false;
     }
 }
@@ -40,6 +40,18 @@ const SOFFICE = process.platform === 'win32'
 function get(obj, pathStr) {
     const normalized = pathStr.replace(/\[(\d+)\]/g, '.$1');
     return normalized.split('.').reduce((o, k) => (o ? o[k] ?? '' : ''), obj);
+}
+function normalizePos(pos) {
+    const map = {
+        tl: 'top-left',
+        tc: 'top-center',
+        tr: 'top-right',
+        bl: 'bottom-left',
+        bc: 'bottom-center',
+        br: 'bottom-right',
+    };
+
+    return map[pos] || pos; // ถ้าไม่ได้ใส่แบบใหม่ ก็ปล่อยของเดิมไว้
 }
 
 function applyInlineStyle(cell, styleTokens) {
@@ -231,8 +243,22 @@ function expandArrayRows(ws, data) {
 
         row.eachCell(cell => {
             if (typeof cell.value !== 'string') return;
+
+            // หา token แรกใน {{ ... }}
             const m = cell.value.match(/{{\s*([^{}]+?)\s*}}/);
-            if (m) arrayName = m[1];
+            if (!m) return;
+
+            const inner = m[1]; // เช่น "goog[0].name|hl|b"
+            const parts = inner.split('|').map(s => s.trim()).filter(Boolean);
+            if (!parts.length) return;
+
+            const key = parts[0]; // เช่น "goog[0].name"
+
+            // ดึงชื่อ array จาก key เช่น goog[0].name -> goog
+            const mm = key.match(/^(\w+)\[0\]\./);
+            if (mm) {
+                arrayName = mm[1]; // "goog"
+            }
         });
 
         if (!arrayName) continue;
@@ -255,6 +281,7 @@ function expandArrayRows(ws, data) {
         }
     }
 }
+
 
 // -------------------------------------------------------
 // render excel
@@ -288,24 +315,35 @@ async function fillXlsx(tplPath, data) {
         let marginLeft, marginRight, marginTop, marginBottom;
 
         if (margin && typeof margin === 'object') {
-            // แบบละเอียด: { left, right, top, bottom }
             marginLeft = Number(margin.left ?? 0) || 0;
             marginRight = Number(margin.right ?? 0) || 0;
             marginTop = Number(margin.top ?? 0) || 0;
             marginBottom = Number(margin.bottom ?? 0) || 0;
         } else {
-            // แบบตัวเดียว: margin: 0.2
             const m = Number(margin) || 0;
             marginLeft = marginRight = marginTop = marginBottom = m;
         }
 
+        // 🔹 auto ปรับ margin ตามตำแหน่งเลขหน้า (หน่วย = นิ้ว)
+        if (opt.pageNumber) {
+            const pos = normalizePos(opt.pageNumberPosition || 'bottom-center');
+            const MIN_TOP = 0.4;     // ~1.8cm
+            const MIN_BOTTOM = 0.4;  // ~1.8cm
+
+            if (pos.startsWith('top') && marginTop < MIN_TOP) {
+                marginTop = MIN_TOP;
+            }
+            if (pos.startsWith('bottom') && marginBottom < MIN_BOTTOM) {
+                marginBottom = MIN_BOTTOM;
+            }
+        }
+
+        // ✅ ค่อยเซ็ต margin เข้า Excel หลังปรับเสร็จแล้ว
         ws.pageSetup.margins = {
             left: marginLeft,
             right: marginRight,
             top: marginTop,
             bottom: marginBottom,
-
-            // header / footer ใส่ขั้นต่ำกัน LibreOffice งอแง
             header: Math.max(marginTop, 0.3),
             footer: Math.max(marginBottom, 1),
         };
@@ -314,36 +352,10 @@ async function fillXlsx(tplPath, data) {
             ws.pageSetup.printTitlesRow = opt.repeatHeaderRows;
         }
 
-        if (opt.pageNumber) {
-            const label = 'หน้า &P / &N';
-            const pos = opt.pageNumberPosition || 'bottom-center';
-
-            ws.headerFooter = ws.headerFooter || {};
-            const map = {
-                'top-left': 'oddHeader',
-                'top-center': 'oddHeader',
-                'top-right': 'oddHeader',
-                'bottom-left': 'oddFooter',
-                'bottom-center': 'oddFooter',
-                'bottom-right': 'oddFooter',
-            };
-
-            const field = map[pos];
-            const align = pos.includes('left')
-                ? '&L'
-                : pos.includes('right')
-                    ? '&R'
-                    : '&C';
-
-            if (field) {
-                ws.headerFooter[field] = `${align}${label}`;
-            }
-        }
-
         expandArrayRows(ws, data);
-
         ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data)));
     });
+
 
     const outXlsx = path.join(os.tmpdir(), `filled_${Date.now()}.xlsx`);
     await wb.xlsx.writeFile(outXlsx);
@@ -378,6 +390,83 @@ function convertToPdf(xlsxPath) {
     });
 }
 
+async function addPageNumbers(pdfPath, options = {}) {
+    const bytes = fs.readFileSync(pdfPath);
+    const pdfDoc = await PDFDocument.load(bytes);
+
+    const fontkit = require('@pdf-lib/fontkit');
+    pdfDoc.registerFontkit(fontkit);
+
+    const fontPath = path.join(__dirname, '..', 'font', 'THSarabun.ttf');
+    const fontBytes = fs.readFileSync(fontPath);
+    const font = await pdfDoc.embedFont(fontBytes);
+
+    const pages = pdfDoc.getPages();
+    const pageCount = pages.length;
+
+    const pos = normalizePos(options.pageNumberPosition || 'bottom-center');
+    const fontSize = options.fontSize || 16;
+    const margin = options.margin || 10;
+
+    pages.forEach((page, index) => {
+        const { width, height } = page.getSize();
+        const text = `หน้า ${index + 1} / ${pageCount}`;
+        const textWidth = font.widthOfTextAtSize(text, fontSize);
+
+        let x = 0;
+        let y = 0;
+
+        switch (pos) {
+            case 'top-left':
+                x = margin;
+                y = height - margin - fontSize;
+                break;
+            case 'top-center':
+                x = (width - textWidth) / 2;
+                y = height - margin - fontSize;
+                break;
+            case 'top-right':
+                x = width - textWidth - margin;
+                y = height - margin - fontSize;
+                break;
+            case 'bottom-left':
+                x = margin;
+                y = margin;
+                break;
+            case 'bottom-right':
+                x = width - textWidth - margin;
+                y = margin;
+                break;
+            case 'bottom-center':
+            default:
+                x = (width - textWidth) / 2;
+                y = margin;
+        }
+
+        page.drawText(text, {
+            x,
+            y,
+            size: fontSize,
+            font,
+            color: hexToRgb('#000000'),
+        });
+    });
+
+    const outBytes = await pdfDoc.save();
+    const outPath = pdfPath.replace(/\.pdf$/, '_paged.pdf');
+    fs.writeFileSync(outPath, outBytes);
+    return outPath;
+}
+
+
+function hexToRgb(hex) {
+    const h = hex.replace('#', '');
+    const bigint = parseInt(h, 16);
+    const r = ((bigint >> 16) & 255) / 255;
+    const g = ((bigint >> 8) & 255) / 255;
+    const b = (bigint & 255) / 255;
+    return rgb(r, g, b);
+}
 // -------------------------------------------------------
 // Schema builder
 // -------------------------------------------------------
@@ -439,8 +528,8 @@ router.get('/schema', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
         let permission = checkPermissionUrl(referer);
-        if(!permission){
-           throw Error('No Permission');
+        if (!permission) {
+            throw Error('No Permission');
         }
         /* if (!fs.existsSync(TEMPLATE_XLSX)) {
             return res.status(500).json({ error: 'Template missing' });
@@ -476,12 +565,17 @@ router.post('/render', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
         let permission = checkPermissionUrl(referer);
-        if(!permission){
-           throw Error('No Permission');
+        if (!permission) {
+            throw Error('No Permission');
         }
         const raw = req.body || {};
         const data = Array.isArray(raw) ? { items: raw } : raw;
 
+        const opt = {
+            pageNumber: true,
+            pageNumberPosition: 'bottom-center',
+            ...(data.__options || {}),
+        };
         if (!data.__templateId) {
             return res.status(400).json({ error: 'No template selected (__templateId missing)' });
         }
@@ -494,13 +588,24 @@ router.post('/render', async (req, res) => {
         const xlsx = await fillXlsx(tplPath, data);
         const pdf = await convertToPdf(xlsx);
 
+        let finalPdf = pdf;
+
+        // ถ้า opt.pageNumber !== false → เติมเลขหน้า
+        if (opt.pageNumber !== false) {
+            finalPdf = await addPageNumbers(pdf, {
+                pageNumberPosition: opt.pageNumberPosition,
+            });
+        }
+
         res.setHeader('Content-Type', 'application/pdf');
-        fs.createReadStream(pdf).pipe(res).on('close', () => {
+        fs.createReadStream(finalPdf).pipe(res).on('close', () => {
             fs.unlink(xlsx, () => { });
             fs.unlink(pdf, () => { });
-            // ถ้าอยากลบ template ที่ upload แล้วใช้ครั้งเดียวก็ลบตรงนี้ได้ด้วย
-            // if (data.__templateId) fs.unlink(tplPath, () => {});
+            if (finalPdf !== pdf) {
+                fs.unlink(finalPdf, () => { });
+            }
         });
+
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: e.message });
@@ -514,8 +619,8 @@ router.post('/schema/upload', async (req, res) => {
     try {
         const referer = req.get('Referer');  // หรือ req.headers.referer
         let permission = checkPermissionUrl(referer);
-        if(!permission){
-           throw Error('No Permission');
+        if (!permission) {
+            throw Error('No Permission');
         }
         // ถ้าใช้ express-fileupload ใน app.js มันจะยัดไฟล์ไว้ที่นี่
         if (!req.files || !req.files.file) {
