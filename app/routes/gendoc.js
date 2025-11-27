@@ -7,6 +7,20 @@ const os = require('os');
 const { spawn } = require('child_process');
 const Excel = require('exceljs');
 
+function checkPermissionUrl(url){
+    let arr_permission = [
+        'http://localhost:3000',
+        'http://localhost:5173'
+    ];
+
+    let check = arr_permission.filter((e)=>{return e == url});
+    if(check.length > 0){
+        return true;
+    }else{
+        return false;
+    }
+}
+
 
 // template เดิม (ยังอยู่ไปก่อน)
 const TEMPLATE_XLSX = path.join(__dirname, '..', 'templates', 'template.xlsx');
