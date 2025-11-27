@@ -148,17 +148,22 @@ function applyInlineStyle(cell, styleTokens) {
         };
     }
 }
+const defaultStyleByKey = {};
 
+function normalizeKeyForStyle(path) {
+    // แปลง goog[0].no, goog[1].no → goog[].no ให้เป็น key เดียวกัน
+    return String(path || '').replace(/\[\d+\]/g, '[]');
+}
 function replaceTokensInCell(cell, data) {
     if (typeof cell.value !== 'string') return;
 
     let hasArrayToken = false;
 
+    // state ต่อ 1 cell
+    let mainKeyPath = null;
+    let hasExplicitStyle = false;
+
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        // inner เช่น:
-        // - "customer_name|hl|b"
-        // - "style|w|b|hl"
-        // - "fx|sum|qty|price"
         const parts = inner.split('|').map(s => s.trim());
         const nonEmpty = parts.filter(Boolean);
         if (nonEmpty.length === 0) return '';
@@ -166,40 +171,48 @@ function replaceTokensInCell(cell, data) {
         const key = nonEmpty[0];
         const styleTokens = nonEmpty.slice(1);
 
-        // -----------------------
-        // 1) style: {{style|...}}
-        // -----------------------
+        // 1) style
         if (key.toLowerCase() === 'style') {
+            hasExplicitStyle = true;
             if (styleTokens.length > 0) {
                 applyInlineStyle(cell, styleTokens);
+
+                // ถ้ามี mainKeyPath → เก็บเป็น default ให้ key นี้
+                if (mainKeyPath) {
+                    const norm = normalizeKeyForStyle(mainKeyPath);
+                    defaultStyleByKey[norm] = styleTokens.slice(); // clone ไว้
+                }
             }
             return '';
         }
 
-        // -----------------------
-        // 2) fx: {{fx|sum|...}}, {{fx|if|...}}
-        // -----------------------
+        // 2) fx
         if (key.toLowerCase() === 'fx') {
             const result = evalFxFormula(styleTokens, data);
-
-            // ถ้าในสูตรมี array path เช่น goog[0].qty
             if (styleTokens.some(t => /\[\d+\]/.test(t))) {
                 hasArrayToken = true;
             }
-
             return String(result ?? '');
         }
 
-        // -----------------------
-        // 3) ปกติ: key = data path เช่น customer_name, goog[0].no
-        // -----------------------
+        // 3) ปกติ: data path
         const keyPath = key;
+        mainKeyPath = mainKeyPath || keyPath; // จำ key แรกของ cell นี้ไว้
 
         if (/\[\d+\]/.test(keyPath)) hasArrayToken = true;
 
         const v = String(get(data, keyPath));
         return v;
     });
+
+    // ถ้า cell นี้มี key แต่ไม่มี style ใน cell → ลองใช้ default
+    if (mainKeyPath && !hasExplicitStyle) {
+        const norm = normalizeKeyForStyle(mainKeyPath);
+        const defTokens = defaultStyleByKey[norm];
+        if (defTokens && defTokens.length > 0) {
+            applyInlineStyle(cell, defTokens);
+        }
+    }
 
     if (hasArrayToken) {
         cell.alignment = {
@@ -215,6 +228,7 @@ function replaceTokensInCell(cell, data) {
         };
     }
 }
+
 
 function isQuoted(str) {
     return /^(['"]).*\1$/.test(str);
