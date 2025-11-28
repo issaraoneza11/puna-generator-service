@@ -227,14 +227,12 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     });
 
     if (hasArrayToken) {
-        // เอา alignment เดิมไว้ก่อน (รวม vt/vm/vb จาก template หรือจาก style token)
         const oldAlign = cell.alignment || {};
 
         cell.alignment = {
             ...oldAlign,
-            // บังคับให้ wrap แน่นอน แต่ **ไม่ทับ vertical เดิม**
             wrapText: true,
-            vertical: oldAlign.vertical || 'top',   // ถ้าเดิมยังไม่กำหนดค่อยใช้ 'top'
+            vertical: oldAlign.vertical || 'top',
         };
 
         cell.border = {
@@ -246,6 +244,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
 
         return;
     }
+
 
 
     // cell ปกติ
@@ -511,6 +510,7 @@ function expandArrayRows(ws, data) {
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
+        let hasBorder = false;
         let maxLines = 1;
 
         row.eachCell((cell, colNumber) => {
@@ -518,6 +518,11 @@ function autoAdjustRowHeightByWrap(ws) {
             if (!align.wrapText) return;
 
             hasWrap = true;
+
+            const border = cell.border || {};
+            if (border.top || border.bottom || border.left || border.right) {
+                hasBorder = true;
+            }
 
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
@@ -531,22 +536,46 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!hasWrap) return;
 
+        // 🟡 เคสแถวใน table (มีกรอบ)
+        if (hasBorder) {
+            const base = (row.height && row.height > 0) ? row.height : 18;
+
+            // ให้โตตามจำนวนบรรทัด แต่ล็อกไม่ให้เกิน 3 บรรทัดมากไป
+            const maxLogicalLines = Math.min(maxLines, 3);
+
+            let target = base * maxLogicalLines;
+
+            const minHeight = 20;   // ไม่ให้เตี้ยเกิน
+            const maxHeight = 60;   // ไม่ให้สูงเกิน
+
+            if (process.platform === 'linux') {
+                target *= 1.05;    // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะ
+            }
+
+            if (target < minHeight) target = minHeight;
+            if (target > maxHeight) target = maxHeight;
+
+            row.height = target;
+            return;
+        }
+
+        // 🟢 เคสหัวเอกสาร (ไม่มีกรอบ)
         const base = (row.height && row.height > 0) ? row.height : 18;
         const minHeight = 20;
+        const extraFactorPerLine = 0.85;
 
-        // แทนที่จะ *maxLines ตรง ๆ ให้เพิ่มทีละบรรทัดแบบแน่นขึ้นหน่อย
-        const extraFactorPerLine = 0.85;  // ยิ่งน้อย ยิ่งชิด
         let target = base + (maxLines - 1) * base * extraFactorPerLine;
 
         if (process.platform === 'linux') {
-            target *= 1.05; // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะนิดนึง
+            target *= 1.05;
         }
 
         if (target < minHeight) target = minHeight;
-
         row.height = target;
     });
 }
+
+
 
 
 // -------------------------------------------------------
