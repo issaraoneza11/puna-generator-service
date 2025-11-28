@@ -530,10 +530,9 @@ function autoAdjustRowHeightByWrap(ws) {
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
 
-            // ประมาณจำนวนตัวอักษรต่อ 1 บรรทัด
-            // ถ้าอยากให้มัน “ขยายเยอะขึ้น” ก็ลด 1.1 ลง
-            // ถ้าอยากให้ขยายช้าลงก็เพิ่มเลขนี้
-            const charsPerLine = Math.max(1, Math.floor(colWidth * 1.1));
+            // 🔧 จูนใหม่ให้แน่นขึ้น:
+            // factor จาก 1.1 → 1.8  = คิดว่าต่อ 1 บรรทัดใส่ตัวอักษรได้เยอะขึ้น
+            const charsPerLine = Math.max(1, Math.floor(colWidth * 1.8));
 
             const logicalLines = Math.ceil(text.length / charsPerLine) || 1;
             if (logicalLines > maxLines) maxLines = logicalLines;
@@ -543,34 +542,35 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (hasBorder) {
             // 🔹 แถวใน table (มีกรอบ)
-            // ให้สูงตามจำนวนบรรทัดแบบตรง ๆ
-            const lineHeight = 14;      // อยากให้แน่นขึ้น ลดเลขนี้ได้
+            // ใช้ lineHeight ต่ำลง ให้แถวเตี้ยลง
+            const lineHeight = 12;      // เดิม 14
             let target = maxLines * lineHeight;
 
-            const minHeight = 18;       // ไม่ให้เตี้ยเกินไป
+            const minHeight = 18;
             if (target < minHeight) target = minHeight;
 
             if (process.platform === 'linux') {
-                target *= 1.05;         // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะ
+                target *= 1.02;        // ลดเผื่อจาก 1.05 → 1.02
             }
 
             row.height = target;
         } else {
-            // 🔹 แถวหัวเอกสาร (ไม่มีกรอบ)
-            const lineHeight = 16;
+            // 🔹 แถวหัวเอกสาร (ไม่มีกรอบ) – ให้สูงกว่า table นิดหน่อย
+            const lineHeight = 15;
             let target = maxLines * lineHeight;
 
             const minHeight = 20;
             if (target < minHeight) target = minHeight;
 
             if (process.platform === 'linux') {
-                target *= 1.05;
+                target *= 1.02;
             }
 
             row.height = target;
         }
     });
 }
+
 
 
 
