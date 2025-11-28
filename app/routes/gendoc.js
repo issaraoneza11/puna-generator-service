@@ -172,6 +172,58 @@ function applyInlineStyle(cell, styleTokens) {
     }
 }
 
+// ตัดข้อความแบบ "label: value..." ให้ขึ้นหลายบรรทัด
+// เช่น "ชื่อลูกค้า: ddddddddddd..." -> 
+//   ชื่อลูกค้า: dddddddddd...
+//             dddddddddd...
+function softWrapLabelValueCell(cell, maxPerLine = 40) {
+    if (!cell || typeof cell.value !== 'string') return;
+
+    const text = cell.value;
+
+    // หา prefix ที่จบด้วย ":" + ช่องว่าง เช่น "ชื่อลูกค้า: "
+    const m = text.match(/^(.*?:\s*)(.+)$/);
+    if (!m) return; // ไม่ใช่ pattern label: value
+
+    const prefix = m[1];   // "ชื่อลูกค้า: "
+    const rest = m[2];     // ค่า ยาว ๆ
+
+    if (rest.length <= maxPerLine) return; // สั้น ไม่ต้องตัด
+
+    // ตัด rest เป็นชิ้น ๆ ตามจำนวนตัวอักษร
+    const chunks = [];
+    let cur = '';
+    for (const ch of rest) {
+        cur += ch;
+        if (cur.length >= maxPerLine) {
+            chunks.push(cur);
+            cur = '';
+        }
+    }
+    if (cur) chunks.push(cur);
+
+    // บรรทัดแรกติด prefix
+    const lines = [];
+    if (chunks.length > 0) {
+        lines.push(prefix + chunks[0]);
+        const indent = ' '.repeat(prefix.length); // indent ตามความยาว prefix
+        for (let i = 1; i < chunks.length; i++) {
+            lines.push(indent + chunks[i]);
+        }
+    } else {
+        lines.push(text);
+    }
+
+    cell.value = lines.join('\n');
+
+    // บังคับเปิด wrap ไว้ด้วย
+    const align = cell.alignment || {};
+    cell.alignment = {
+        ...align,
+        wrapText: true,
+        vertical: align.vertical || 'top',
+    };
+}
 
 function normalizeKeyForStyle(path) {
     // แปลง goog[0].no, goog[1].no → goog[].no ให้เป็น key เดียวกัน
@@ -246,16 +298,19 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     }
 
 
+
     // cell ปกติ
     if (mainKeyPath) {
         applyDefaultStyle(cell);
 
-        // 🔹 ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้
+        // ตัดแบบ "label: value..." ให้ขึ้นหลายบรรทัดสวย ๆ
+        // จะมีผลกับ cell ที่เป็น "ชื่อลูกค้า: {{customer_name}}", "หมายเลขเอกสาร: {{doc_no}}" ฯลฯ
+        softWrapLabelValueCell(cell, 40);  // ปรับ 40 ได้ตามที่อยากให้ยาว/สั้น
+
+        // ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้ (เผื่อเคสอื่น)
         if (typeof cell.value === 'string') {
             const align = cell.alignment || {};
             const textLen = cell.value.length;
-
-            // ปรับเลข 40 ตามใจเลย ถ้าต้องการให้ไวขึ้น / ช้าลง
             if (!align.wrapText && textLen > 40) {
                 cell.alignment = {
                     ...align,
@@ -273,6 +328,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             applyInlineStyle(cell, defTokens);
         }
     }
+
 
 }
 
