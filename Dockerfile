@@ -1,29 +1,39 @@
 FROM node:20.11.1-slim
 
-# ป้องกัน interactive mode
+# ไม่ถาม interactive + ตั้ง timezone
 ENV DEBIAN_FRONTEND=noninteractive
-
-# ติดตั้ง LibreOffice + ฟอนต์ไทย + timezone
-RUN apt-get update && \
-    apt-get install -y libreoffice libreoffice-writer libreoffice-calc libreoffice-impress && \
-    apt-get install -y fonts-thai-tlwg tzdata && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# ตั้ง timezone
 ENV TZ=Asia/Bangkok
 
-# โฟลเดอร์โปรเจค
+# ติดตั้ง LibreOffice + ฟอนต์ไทยพื้นฐาน + fontconfig (ไว้ใช้ fc-cache)
+RUN apt-get update && \
+    apt-get install -y \
+        libreoffice \
+        libreoffice-writer \
+        libreoffice-calc \
+        libreoffice-impress \
+        fonts-thai-tlwg \
+        fontconfig \
+        tzdata \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# โฟลเดอร์โปรเจกต์
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
 
-# คัดลอกโปรเจคทั้งหมด
+# คัดลอกโปรเจกต์ทั้งหมดเข้า image
 COPY . .
+
+# ✅ ติดตั้งฟอนต์ TH Sarabun จากไฟล์ในโปรเจกต์
+# font/THSarabun.ttf -> ตำแหน่งฟอนต์บนระบบ
+RUN mkdir -p /usr/share/fonts/truetype/thai && \
+    cp app/font/THSarabun.ttf /usr/share/fonts/truetype/thai/THSarabun.ttf && \
+    fc-cache -f -v
 
 # ติดตั้ง dependencies
 RUN npm install --legacy-peer-deps --include=dev --unsafe-perm
 
-# ตั้งค่า environment
+# env อื่น ๆ
 ENV START_PROJECT=development
 
-# เริ่มโปรเจค
+# เริ่มโปรเจกต์
 CMD ["npm", "start"]
