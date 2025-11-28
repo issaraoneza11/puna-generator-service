@@ -245,6 +245,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         return;
     }
 
+
     // cell ปกติ
     if (mainKeyPath) {
         applyDefaultStyle(cell);
@@ -528,11 +529,10 @@ function autoAdjustRowHeightByWrap(ws) {
 
         row.eachCell((cell, colNumber) => {
             const align = cell.alignment || {};
-            if (!align.wrapText) return;   // ไม่มี wrap ก็ไม่สนใจ cell นี้
+            if (!align.wrapText) return;
 
             hasWrap = true;
 
-            // ถ้ามีเส้นกรอบ แปลว่าเป็นแถวใน table
             const border = cell.border || {};
             if (border.top || border.bottom || border.left || border.right) {
                 hasBorder = true;
@@ -544,36 +544,39 @@ function autoAdjustRowHeightByWrap(ws) {
             const col = ws.getColumn(colNumber);
             const colCharWidth = col.width || 10;
 
-            // ประมาณจำนวนบรรทัดจากความกว้างคอลัมน์
-            const lines = Math.ceil(text.length / colCharWidth) || 1;
+            // นับบรรทัดจากความยาว + เผื่อกรณีมี \n จริง ๆ
+            const hardLines = text.split(/\r?\n/).length;
+            const softLines = Math.ceil(text.length / colCharWidth) || 1;
+            const lines = Math.max(hardLines, softLines);
+
             if (lines > maxLines) maxLines = lines;
         });
 
-        // ถ้าไม่มี wrap เลย ก็ไม่ทำอะไร
         if (!hasWrap) return;
 
-        // ❗ ถ้าเป็นแถวที่ "ไม่มีกรอบ" = แถวหัวเอกสาร
-        //    ไม่ไปยุ่ง ปล่อยให้ Excel/LibreOffice auto height ตามเดิม
+        // อยากให้ auto เฉพาะแถวที่เป็น table ก็เก็บ hasBorder ไว้ได้
         if (!hasBorder) return;
 
-        // 🔹 ถึงตรงนี้ = เป็นแถวใน table ที่มี wrapText → ปรับความสูง
         const base = (row.height && row.height > 0) ? row.height : 18;
 
-        // ให้สูงตามจำนวนบรรทัดแบบค่อนข้างแน่น (ไม่ฟูเกินไป)
-        const lines = Math.max(maxLines, 1);
-        const perLineFactor = 0.65;          // ถ้ารู้สึกยังสูงไป ลดเลขนี้ลงได้ เช่น 0.6, 0.55
-        let target = base * (1 + (lines - 1) * perLineFactor);
+        // จำกัดไม่ให้ถือว่าเกิน 6 บรรทัด (กันสูงเวอร์)
+        const lines = Math.min(maxLines, 6);
 
-        if (process.platform === 'linux') {
-            target *= 1.03; // เผื่อ LibreOffice ลีนุกซ์นิดหน่อย
-        }
+        // ลด factor จาก 0.65 → 0.35 จะเตี้ยลงเยอะ
+        const perLineFactor = 0.35;
+        let target = base * (1 + (lines - 1) * perLineFactor);
 
         const minHeight = 18;
         if (target < minHeight) target = minHeight;
 
+        if (process.platform === 'linux') {
+            target *= 1.03;
+        }
+
         row.height = target;
     });
 }
+
 
 
 
