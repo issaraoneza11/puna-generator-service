@@ -61,6 +61,29 @@ function normalizePos(pos) {
 
     return map[pos] || pos; // ถ้าไม่ได้ใส่แบบใหม่ ก็ปล่อยของเดิมไว้
 }
+function applyDefaultStyle(cell) {
+    const oldFont = cell.font || {};
+    const oldAlign = cell.alignment || {};
+
+    cell.font = {
+        ...oldFont,
+        // ถ้ามีของเดิมแล้ว จะไม่ทับ
+        name: oldFont.name ?? 'TH SarabunPSK',
+        size: oldFont.size ?? 16,
+        color: oldFont.color ?? { argb: 'FF000000' },
+        bold: oldFont.bold ?? false,
+        italic: oldFont.italic ?? false,
+        underline: oldFont.underline ?? false,
+    };
+
+    cell.alignment = {
+        ...oldAlign,
+        horizontal: oldAlign.horizontal ?? 'left',
+        vertical: oldAlign.vertical ?? 'top',
+        wrapText: oldAlign.wrapText ?? true,
+    };
+}
+
 
 function applyInlineStyle(cell, styleTokens) {
     if (!styleTokens || styleTokens.length === 0) return;
@@ -164,12 +187,11 @@ function replaceTokensInCell(cell, data) {
     let hasExplicitStyle = false;
 
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        const parts = inner.split('|').map(s => s.trim());
-        const nonEmpty = parts.filter(Boolean);
-        if (nonEmpty.length === 0) return '';
+        const tokens = splitPlaceholder(inner);   // 👈 ใช้ฟังก์ชันใหม่
+        if (tokens.length === 0) return '';
 
-        const key = nonEmpty[0];
-        const styleTokens = nonEmpty.slice(1);
+        const key = tokens[0];
+        const styleTokens = tokens.slice(1);
 
         // 1) style
         if (key.toLowerCase() === 'style') {
@@ -177,10 +199,9 @@ function replaceTokensInCell(cell, data) {
             if (styleTokens.length > 0) {
                 applyInlineStyle(cell, styleTokens);
 
-                // ถ้ามี mainKeyPath → เก็บเป็น default ให้ key นี้
                 if (mainKeyPath) {
                     const norm = normalizeKeyForStyle(mainKeyPath);
-                    defaultStyleByKey[norm] = styleTokens.slice(); // clone ไว้
+                    defaultStyleByKey[norm] = styleTokens.slice();
                 }
             }
             return '';
@@ -197,7 +218,7 @@ function replaceTokensInCell(cell, data) {
 
         // 3) ปกติ: data path
         const keyPath = key;
-        mainKeyPath = mainKeyPath || keyPath; // จำ key แรกของ cell นี้ไว้
+        mainKeyPath = mainKeyPath || keyPath;
 
         if (/\[\d+\]/.test(keyPath)) hasArrayToken = true;
 
@@ -205,15 +226,9 @@ function replaceTokensInCell(cell, data) {
         return v;
     });
 
-    // ถ้า cell นี้มี key แต่ไม่มี style ใน cell → ลองใช้ default
-    if (mainKeyPath && !hasExplicitStyle) {
-        const norm = normalizeKeyForStyle(mainKeyPath);
-        const defTokens = defaultStyleByKey[norm];
-        if (defTokens && defTokens.length > 0) {
-            applyInlineStyle(cell, defTokens);
-        }
-    }
-
+    // 🟢 กรณีเป็น array cell เช่น goog[0].no, goog[1].no ...
+    // ให้ใช้ style จาก template ที่เรา clone มาจาก expandArrayRows อย่างเดียว
+    // ไม่ต้องไปปรับ font / alignment เพิ่มอีก (กัน style เพี้ยนระหว่างแถว)
     if (hasArrayToken) {
         cell.alignment = {
             ...(cell.alignment || {}),
@@ -226,8 +241,44 @@ function replaceTokensInCell(cell, data) {
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
+        return; // 👈 ออกจากฟังก์ชันตรงนี้เลย
     }
+
+    if (hasArrayToken) {
+        // ใช้ style จาก template เป็นหลัก
+        // แค่บังคับให้ตบคำ + ชิดบน + ใส่กรอบบาง ๆ
+        cell.alignment = {
+            ...(cell.alignment || {}),
+            wrapText: true,
+            vertical: 'top',
+        };
+        cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' },
+        };
+        return; // 👈 ไม่ต้องทำอะไรต่อแล้ว กัน style เพี้ยน
+    }
+
+    // 🔽 ด้านล่างนี้ใช้กับ cell ปกติที่ไม่ใช่ array 🔽
+
+    // ถ้า cell นี้มี key และยังไม่มี font/alignment เลย → set default ให้
+    if (mainKeyPath && !cell.font && !cell.alignment) {
+        applyDefaultStyle(cell);
+    }
+
+    // ถ้าไม่มี style ระบุเองใน cell → ใช้ default style จาก key
+    if (mainKeyPath && !hasExplicitStyle) {
+        const norm = normalizeKeyForStyle(mainKeyPath);
+        const defTokens = defaultStyleByKey[norm];
+        if (defTokens && defTokens.length > 0) {
+            applyInlineStyle(cell, defTokens);
+        }
+    }
+
 }
+
 
 
 function isQuoted(str) {
@@ -237,6 +288,28 @@ function isQuoted(str) {
 function stripQuotes(str) {
     const m = str.match(/^(['"])(.*)\1$/);
     return m ? m[2] : str;
+}
+function splitPlaceholder(inner) {
+    if (!inner) return [];
+
+    // แปลง \r\n, \n ให้เป็น space ธรรมดา
+    let s = String(inner)
+        .replace(/\r\n/g, '\n')
+        .replace(/\n+/g, ' ');
+
+    // split ตาม | แล้ว trim ช่องว่างออก
+    let parts = s.split('|').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) return [];
+
+    // กรณีเคาะบรรทัดผิด เช่น "style\n  ni | hl..."
+    // จะได้ "style ni" → ถ้า token แรกมี space และไม่ใช่ string แบบใส่ quote
+    // ให้แตกเพิ่มตาม space เป็นหลาย token
+    if (!isQuoted(parts[0]) && /\s/.test(parts[0])) {
+        const firstPieces = parts[0].split(/\s+/).filter(Boolean);
+        parts = [...firstPieces, ...parts.slice(1)];
+    }
+
+    return parts;
 }
 
 function resolveTokenValue(token, data) {
@@ -394,6 +467,7 @@ function expandArrayRows(ws, data) {
         const row = ws.getRow(rowNum);
         let arrayName = null;
 
+        // หา array key จาก row นี้ เช่น goog[0].no
         row.eachCell(cell => {
             if (typeof cell.value !== 'string') return;
             const m = cell.value.match(/{{\s*([^{}]+?)\s*}}/);
@@ -413,32 +487,41 @@ function expandArrayRows(ws, data) {
         const arr = data[arrayName];
         if (!Array.isArray(arr) || arr.length <= 1) continue;
 
-        const templateValues = row.values.slice();
+        // เก็บค่า template row ไว้ให้ชัด ๆ
+        const templateRow = ws.getRow(rowNum);
+        const templateValues = templateRow.values.slice();
+        const templateHeight = templateRow.height;
 
+        // เก็บ style ของแต่ละคอลัมน์แบบ deep copy
+        const templateStyles = {};
+        templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
+            templateStyles[col] = JSON.parse(JSON.stringify(tmplCell.style || {}));
+        });
+
+        // สร้าง row เพิ่มตามจำนวน array
         for (let i = 1; i < arr.length; i++) {
             const newRow = ws.insertRow(rowNum + i, []);
-            newRow.values = templateValues;
+            newRow.values = templateValues.slice();
 
-            // 🟢 ก๊อป style จาก row template มาด้วย
-            row.eachCell({ includeEmpty: true }, (tmplCell, col) => {
+            if (templateHeight != null) {
+                newRow.height = templateHeight;
+            }
+
+            templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
                 const cell = newRow.getCell(col);
 
-                // copy style ทั้งก้อน (font, border, fill, alignment ฯลฯ)
-                cell.style = { ...tmplCell.style };
+                // clone style จาก template เป๊ะ ๆ
+                cell.style = JSON.parse(JSON.stringify(templateStyles[col] || {}));
 
+                // แก้ [0] → [i] เฉพาะ cell ที่เป็น string
                 if (typeof cell.value === 'string') {
                     cell.value = cell.value.replace(/\[0\]/g, `[${i}]`);
-                    // ถ้าตัวอยากบังคับฟอนต์เป็น TH Sarabun ก็ทำแบบ merge ไม่ใช่ทับหมด
-                    if (cell.font) {
-                        cell.font = { ...cell.font, name: 'TH SarabunPSK' };
-                    } else {
-                        cell.font = { name: 'TH SarabunPSK' };
-                    }
                 }
             });
         }
     }
 }
+
 
 
 
@@ -656,12 +739,11 @@ async function buildSchemaFromTemplate(tplPath) {
                 let m;
                 while ((m = re.exec(cell.value))) {
                     const inner = m[1];
-                    const parts = inner.split('|').map(s => s.trim());
-                    const nonEmpty = parts.filter(Boolean);
-                    if (nonEmpty.length === 0) continue;
+                    const tokens = splitPlaceholder(inner);
+                    if (tokens.length === 0) continue;
 
-                    const key = nonEmpty[0];
-                    const rest = nonEmpty.slice(1);
+                    const key = tokens[0];
+                    const rest = tokens.slice(1);
                     if (key.toLowerCase().startsWith('as:')) {
                         continue;
                     }
