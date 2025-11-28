@@ -245,11 +245,24 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         return;
     }
 
-
-
     // cell ปกติ
     if (mainKeyPath) {
-        applyDefaultStyle(cell);   // เรียกเสมอ ไม่ต้องเช็ค !cell.font && !cell.alignment
+        applyDefaultStyle(cell);
+
+        // 🔹 ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้
+        if (typeof cell.value === 'string') {
+            const align = cell.alignment || {};
+            const textLen = cell.value.length;
+
+            // ปรับเลข 40 ตามใจเลย ถ้าต้องการให้ไวขึ้น / ช้าลง
+            if (!align.wrapText && textLen > 40) {
+                cell.alignment = {
+                    ...align,
+                    wrapText: true,
+                    vertical: align.vertical || 'top',
+                };
+            }
+        }
     }
 
     if (mainKeyPath && !hasExplicitStyle) {
