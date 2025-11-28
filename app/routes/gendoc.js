@@ -524,7 +524,6 @@ function expandArrayRows(ws, data) {
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
-        let hasBorder = false;
         let maxLines = 1;
 
         row.eachCell((cell, colNumber) => {
@@ -533,18 +532,13 @@ function autoAdjustRowHeightByWrap(ws) {
 
             hasWrap = true;
 
-            const border = cell.border || {};
-            if (border.top || border.bottom || border.left || border.right) {
-                hasBorder = true;
-            }
-
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
             const col = ws.getColumn(colNumber);
             const colCharWidth = col.width || 10;
 
-            // นับบรรทัดจากความยาว + เผื่อกรณีมี \n จริง ๆ
+            // นับทั้งบรรทัดจริง (\n) และบรรทัดคาดเดาจากความยาว
             const hardLines = text.split(/\r?\n/).length;
             const softLines = Math.ceil(text.length / colCharWidth) || 1;
             const lines = Math.max(hardLines, softLines);
@@ -552,30 +546,29 @@ function autoAdjustRowHeightByWrap(ws) {
             if (lines > maxLines) maxLines = lines;
         });
 
+        // ถ้าไม่มี cell ไหนเปิด wrap ก็ไม่ต้องทำอะไร
         if (!hasWrap) return;
-
-        // อยากให้ auto เฉพาะแถวที่เป็น table ก็เก็บ hasBorder ไว้ได้
-        if (!hasBorder) return;
 
         const base = (row.height && row.height > 0) ? row.height : 18;
 
-        // จำกัดไม่ให้ถือว่าเกิน 6 บรรทัด (กันสูงเวอร์)
+        // กันไม่ให้คิดว่ามีบรรทัดเยอะเกินไป จะสูงเวอร์
         const lines = Math.min(maxLines, 6);
 
-        // ลด factor จาก 0.65 → 0.35 จะเตี้ยลงเยอะ
-        const perLineFactor = 0.35;
+        // ยิ่ง factor น้อย แถวจะยิ่งเตี้ย
+        const perLineFactor = 0.4;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
         const minHeight = 18;
         if (target < minHeight) target = minHeight;
 
         if (process.platform === 'linux') {
-            target *= 1.03;
+            target *= 1.03; // เผื่อเล็กน้อยบนลีนุกซ์
         }
 
         row.height = target;
     });
 }
+
 
 
 
