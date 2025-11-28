@@ -227,19 +227,26 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     });
 
     if (hasArrayToken) {
+        // เอา alignment เดิมไว้ก่อน (รวม vt/vm/vb จาก template หรือจาก style token)
+        const oldAlign = cell.alignment || {};
+
         cell.alignment = {
-            ...(cell.alignment || {}),
+            ...oldAlign,
+            // บังคับให้ wrap แน่นอน แต่ **ไม่ทับ vertical เดิม**
             wrapText: true,
-            vertical: 'top',
+            vertical: oldAlign.vertical || 'top',   // ถ้าเดิมยังไม่กำหนดค่อยใช้ 'top'
         };
+
         cell.border = {
             top: { style: 'thin' },
             left: { style: 'thin' },
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
+
         return;
     }
+
 
     // cell ปกติ
     if (mainKeyPath) {
@@ -512,38 +519,35 @@ function autoAdjustRowHeightByWrap(ws) {
 
             hasWrap = true;
 
-            // เอาเฉพาะ text ปกติ
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
             const col = ws.getColumn(colNumber);
-            // ความกว้างคอลัมน์ในหน่วย "ตัวอักษรประมาณ ๆ"
             const colCharWidth = col.width || 10;
 
-            // ประมาณจำนวนบรรทัดที่จะต้องมี
             const lines = Math.ceil(text.length / colCharWidth) || 1;
             if (lines > maxLines) maxLines = lines;
         });
 
         if (!hasWrap) return;
 
-        // base ถ้า template ไม่เซ็ตก็กำหนดให้ 18 (ประมาณ 1 บรรทัด Sarabun)
-        const base = row.height || 18;
-        const minHeight = 22;
+        const base = (row.height && row.height > 0) ? row.height : 18;
+        const minHeight = 20;
 
-        let target = base * maxLines;
+        // แทนที่จะ *maxLines ตรง ๆ ให้เพิ่มทีละบรรทัดแบบแน่นขึ้นหน่อย
+        const extraFactorPerLine = 0.85;  // ยิ่งน้อย ยิ่งชิด
+        let target = base + (maxLines - 1) * base * extraFactorPerLine;
 
-        // LibreOffice บน Linux มักกินขอบล่างไปหน่อย
         if (process.platform === 'linux') {
-            target *= 1.1;
+            target *= 1.05; // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะนิดนึง
         }
 
-        // กันไม่ให้เตี้ยเกิน
-        target = Math.max(target, minHeight);
+        if (target < minHeight) target = minHeight;
 
         row.height = target;
     });
 }
+
 
 // -------------------------------------------------------
 // render excel
