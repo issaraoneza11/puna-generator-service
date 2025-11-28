@@ -501,7 +501,30 @@ function expandArrayRows(ws, data) {
 
 
 
+function autoAdjustRowHeightByWrap(ws) {
+    ws.eachRow(row => {
+        let hasWrap = false;
 
+        row.eachCell(cell => {
+            const align = cell.alignment || {};
+            if (align.wrapText) {
+                hasWrap = true;
+            }
+        });
+
+        if (!hasWrap) return;
+
+        // base ถ้า template ไม่เซ็ต ก็ให้ค่าประมาณ ๆ
+        const base = row.height || 18;
+
+        // สำหรับ Linux ให้ดันให้สูงขึ้นหน่อย
+        const minHeight = 26; // ปรับได้ตามที่ตัวลองแล้วโอเค
+
+        if (process.platform === 'linux') {
+            row.height = Math.max(base, minHeight);
+        }
+    });
+}
 // -------------------------------------------------------
 // render excel
 // -------------------------------------------------------
@@ -573,16 +596,24 @@ async function fillXlsx(tplPath, data) {
         }
 
         expandArrayRows(ws, data);
+
+        // แทนค่า + style จาก token
         ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
+
+        // 🔹 ดันความสูงแถวที่มี wrapText (โดยเฉพาะบน Linux)
+        autoAdjustRowHeightByWrap(ws);
+
+        // บังคับฟอนต์ TH Sarabun ให้ทุก cell
         ws.eachRow(row => {
             row.eachCell(cell => {
                 const oldFont = cell.font || {};
                 cell.font = {
                     ...oldFont,
-                    name: 'TH SarabunPSK',   // ใช้ชื่อตาม fc-list เลย
+                    name: 'TH SarabunPSK',
                 };
             });
         });
+
     });
 
 
