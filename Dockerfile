@@ -1,16 +1,20 @@
 FROM node:20.11.1-slim
 
-# ป้องกัน interactive mode
+# ป้องกัน interactive mode + ตั้ง timezone
 ENV DEBIAN_FRONTEND=noninteractive
-
-# ติดตั้ง LibreOffice + ฟอนต์ไทย + timezone
-RUN apt-get update && \
-    apt-get install -y libreoffice libreoffice-writer libreoffice-calc libreoffice-impress && \
-    apt-get install -y fonts-thai-tlwg tzdata && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# ตั้ง timezone
 ENV TZ=Asia/Bangkok
+
+# ติดตั้ง LibreOffice + ฟอนต์ไทย (TLWG + TH Sarabun) + timezone
+RUN apt-get update && \
+    apt-get install -y \
+        libreoffice \
+        libreoffice-writer \
+        libreoffice-calc \
+        libreoffice-impress \
+        fonts-thai-tlwg \
+        fonts-th-sarabun-new \
+        tzdata \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # โฟลเดอร์โปรเจค
 RUN mkdir -p /usr/src/app
