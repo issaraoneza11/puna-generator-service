@@ -26,7 +26,7 @@ COPY . .
 # ✅ ติดตั้งฟอนต์ TH Sarabun จากไฟล์ในโปรเจกต์
 # font/THSarabun.ttf -> ตำแหน่งฟอนต์บนระบบ
 RUN mkdir -p /usr/share/fonts/truetype/thai && \
-    cp font/THSarabun.ttf /usr/share/fonts/truetype/thai/THSarabun.ttf && \
+    cp app/font/THSarabun.ttf /usr/share/fonts/truetype/thai/THSarabun.ttf && \
     fc-cache -f -v
 
 # ติดตั้ง dependencies
