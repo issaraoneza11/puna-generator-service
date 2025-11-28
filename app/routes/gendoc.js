@@ -80,7 +80,7 @@ function applyDefaultStyle(cell) {
         ...oldAlign,
         horizontal: oldAlign.horizontal ?? 'left',
         vertical: oldAlign.vertical ?? 'top',
-        wrapText: oldAlign.wrapText ?? true,
+        wrapText: oldAlign.wrapText ?? false,
     };
 }
 
@@ -171,13 +171,13 @@ function applyInlineStyle(cell, styleTokens) {
         };
     }
 }
-const defaultStyleByKey = {};
+
 
 function normalizeKeyForStyle(path) {
     // แปลง goog[0].no, goog[1].no → goog[].no ให้เป็น key เดียวกัน
     return String(path || '').replace(/\[\d+\]/g, '[]');
 }
-function replaceTokensInCell(cell, data) {
+function replaceTokensInCell(cell, data, defaultStyleByKey) {
     if (typeof cell.value !== 'string') return;
 
     let hasArrayToken = false;
@@ -226,9 +226,6 @@ function replaceTokensInCell(cell, data) {
         return v;
     });
 
-    // 🟢 กรณีเป็น array cell เช่น goog[0].no, goog[1].no ...
-    // ให้ใช้ style จาก template ที่เรา clone มาจาก expandArrayRows อย่างเดียว
-    // ไม่ต้องไปปรับ font / alignment เพิ่มอีก (กัน style เพี้ยนระหว่างแถว)
     if (hasArrayToken) {
         cell.alignment = {
             ...(cell.alignment || {}),
@@ -241,34 +238,14 @@ function replaceTokensInCell(cell, data) {
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
-        return; // 👈 ออกจากฟังก์ชันตรงนี้เลย
+        return;
     }
 
-    if (hasArrayToken) {
-        // ใช้ style จาก template เป็นหลัก
-        // แค่บังคับให้ตบคำ + ชิดบน + ใส่กรอบบาง ๆ
-        cell.alignment = {
-            ...(cell.alignment || {}),
-            wrapText: true,
-            vertical: 'top',
-        };
-        cell.border = {
-            top: { style: 'thin' },
-            left: { style: 'thin' },
-            bottom: { style: 'thin' },
-            right: { style: 'thin' },
-        };
-        return; // 👈 ไม่ต้องทำอะไรต่อแล้ว กัน style เพี้ยน
+    // cell ปกติ
+    if (mainKeyPath) {
+        applyDefaultStyle(cell);   // เรียกเสมอ ไม่ต้องเช็ค !cell.font && !cell.alignment
     }
 
-    // 🔽 ด้านล่างนี้ใช้กับ cell ปกติที่ไม่ใช่ array 🔽
-
-    // ถ้า cell นี้มี key และยังไม่มี font/alignment เลย → set default ให้
-    if (mainKeyPath && !cell.font && !cell.alignment) {
-        applyDefaultStyle(cell);
-    }
-
-    // ถ้าไม่มี style ระบุเองใน cell → ใช้ default style จาก key
     if (mainKeyPath && !hasExplicitStyle) {
         const norm = normalizeKeyForStyle(mainKeyPath);
         const defTokens = defaultStyleByKey[norm];
@@ -529,9 +506,10 @@ function expandArrayRows(ws, data) {
 // render excel
 // -------------------------------------------------------
 async function fillXlsx(tplPath, data) {
+
     const wb = new Excel.Workbook();
     await wb.xlsx.readFile(tplPath);
-
+    const defaultStyleByKey = {};
     const defaultOpt = {
         paperSize: 'A4',
         orientation: 'portrait',
@@ -595,7 +573,16 @@ async function fillXlsx(tplPath, data) {
         }
 
         expandArrayRows(ws, data);
-        ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data)));
+        ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
+        ws.eachRow(row => {
+            row.eachCell(cell => {
+                const oldFont = cell.font || {};
+                cell.font = {
+                    ...oldFont,
+                    name: 'TH SarabunPSK',   // ใช้ชื่อตาม fc-list เลย
+                };
+            });
+        });
     });
 
 
