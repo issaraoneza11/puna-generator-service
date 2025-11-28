@@ -521,7 +521,7 @@ function autoAdjustRowHeightByWrap(ws) {
 
             const border = cell.border || {};
             if (border.top || border.bottom || border.left || border.right) {
-                hasBorder = true;
+                hasBorder = true;   // แถวนี้เป็นแถวใน table
             }
 
             const text = (typeof cell.value === 'string') ? cell.value : '';
@@ -530,44 +530,28 @@ function autoAdjustRowHeightByWrap(ws) {
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
 
-            // 🔧 จูนใหม่ให้แน่นขึ้น:
-            // factor จาก 1.1 → 1.8  = คิดว่าต่อ 1 บรรทัดใส่ตัวอักษรได้เยอะขึ้น
+            // ประมาณจำนวนตัวอักษรที่ใส่ได้ต่อ 1 บรรทัด (ให้แน่นขึ้น)
             const charsPerLine = Math.max(1, Math.floor(colWidth * 1.8));
-
             const logicalLines = Math.ceil(text.length / charsPerLine) || 1;
+
             if (logicalLines > maxLines) maxLines = logicalLines;
         });
 
-        if (!hasWrap) return;
+        // ถ้าไม่มี wrap หรือไม่มีกรอบ -> ไม่ยุ่ง (กันหัวเอกสารพัง)
+        if (!hasWrap || !hasBorder) return;
 
-        if (hasBorder) {
-            // 🔹 แถวใน table (มีกรอบ)
-            // ใช้ lineHeight ต่ำลง ให้แถวเตี้ยลง
-            const lineHeight = 12;      // เดิม 14
-            let target = maxLines * lineHeight;
+        // ปรับเฉพาะแถวใน table
+        const lineHeight = 12;      // สูงต่อ 1 บรรทัด (ค่อนข้างเตี้ยลง)
+        let target = maxLines * lineHeight;
 
-            const minHeight = 18;
-            if (target < minHeight) target = minHeight;
+        const minHeight = 18;       // ไม่ให้เตี้ยเกิน
+        if (target < minHeight) target = minHeight;
 
-            if (process.platform === 'linux') {
-                target *= 1.02;        // ลดเผื่อจาก 1.05 → 1.02
-            }
-
-            row.height = target;
-        } else {
-            // 🔹 แถวหัวเอกสาร (ไม่มีกรอบ) – ให้สูงกว่า table นิดหน่อย
-            const lineHeight = 15;
-            let target = maxLines * lineHeight;
-
-            const minHeight = 20;
-            if (target < minHeight) target = minHeight;
-
-            if (process.platform === 'linux') {
-                target *= 1.02;
-            }
-
-            row.height = target;
+        if (process.platform === 'linux') {
+            target *= 1.02;         // เผื่อนิดหน่อยให้ LibreOffice
         }
+
+        row.height = target;
     });
 }
 
