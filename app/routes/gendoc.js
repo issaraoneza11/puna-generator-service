@@ -502,29 +502,49 @@ function expandArrayRows(ws, data) {
 
 
 function autoAdjustRowHeightByWrap(ws) {
-    ws.eachRow(row => {
+    ws.eachRow((row) => {
         let hasWrap = false;
+        let maxLines = 1;
 
-        row.eachCell(cell => {
+        row.eachCell((cell, colNumber) => {
             const align = cell.alignment || {};
-            if (align.wrapText) {
-                hasWrap = true;
-            }
+            if (!align.wrapText) return;
+
+            hasWrap = true;
+
+            // เอาเฉพาะ text ปกติ
+            const text = (typeof cell.value === 'string') ? cell.value : '';
+            if (!text) return;
+
+            const col = ws.getColumn(colNumber);
+            // ความกว้างคอลัมน์ในหน่วย "ตัวอักษรประมาณ ๆ"
+            const colCharWidth = col.width || 10;
+
+            // ประมาณจำนวนบรรทัดที่จะต้องมี
+            const lines = Math.ceil(text.length / colCharWidth) || 1;
+            if (lines > maxLines) maxLines = lines;
         });
 
         if (!hasWrap) return;
 
-        // base ถ้า template ไม่เซ็ต ก็ให้ค่าประมาณ ๆ
+        // base ถ้า template ไม่เซ็ตก็กำหนดให้ 18 (ประมาณ 1 บรรทัด Sarabun)
         const base = row.height || 18;
+        const minHeight = 22;
 
-        // สำหรับ Linux ให้ดันให้สูงขึ้นหน่อย
-        const minHeight = 26; // ปรับได้ตามที่ตัวลองแล้วโอเค
+        let target = base * maxLines;
 
+        // LibreOffice บน Linux มักกินขอบล่างไปหน่อย
         if (process.platform === 'linux') {
-            row.height = Math.max(base, minHeight);
+            target *= 1.1;
         }
+
+        // กันไม่ให้เตี้ยเกิน
+        target = Math.max(target, minHeight);
+
+        row.height = target;
     });
 }
+
 // -------------------------------------------------------
 // render excel
 // -------------------------------------------------------
