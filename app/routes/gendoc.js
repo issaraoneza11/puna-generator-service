@@ -528,50 +528,47 @@ function autoAdjustRowHeightByWrap(ws) {
             if (!text) return;
 
             const col = ws.getColumn(colNumber);
-            const colCharWidth = col.width || 10;
+            const colWidth = col.width || 10;
 
-            const lines = Math.ceil(text.length / colCharWidth) || 1;
-            if (lines > maxLines) maxLines = lines;
+            // ประมาณจำนวนตัวอักษรต่อ 1 บรรทัด
+            // ถ้าอยากให้มัน “ขยายเยอะขึ้น” ก็ลด 1.1 ลง
+            // ถ้าอยากให้ขยายช้าลงก็เพิ่มเลขนี้
+            const charsPerLine = Math.max(1, Math.floor(colWidth * 1.1));
+
+            const logicalLines = Math.ceil(text.length / charsPerLine) || 1;
+            if (logicalLines > maxLines) maxLines = logicalLines;
         });
 
         if (!hasWrap) return;
 
-        // 🟡 เคสแถวใน table (มีกรอบ)
         if (hasBorder) {
-            const base = (row.height && row.height > 0) ? row.height : 18;
+            // 🔹 แถวใน table (มีกรอบ)
+            // ให้สูงตามจำนวนบรรทัดแบบตรง ๆ
+            const lineHeight = 14;      // อยากให้แน่นขึ้น ลดเลขนี้ได้
+            let target = maxLines * lineHeight;
 
-            // ให้โตตามจำนวนบรรทัด แต่ล็อกไม่ให้เกิน 3 บรรทัดมากไป
-            const maxLogicalLines = Math.min(maxLines, 3);
-
-            let target = base * maxLogicalLines;
-
-            const minHeight = 20;   // ไม่ให้เตี้ยเกิน
-            const maxHeight = 60;   // ไม่ให้สูงเกิน
+            const minHeight = 18;       // ไม่ให้เตี้ยเกินไป
+            if (target < minHeight) target = minHeight;
 
             if (process.platform === 'linux') {
-                target *= 1.05;    // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะ
+                target *= 1.05;         // เผื่อ LibreOffice บนลีนุกซ์กินพื้นที่เยอะ
             }
 
+            row.height = target;
+        } else {
+            // 🔹 แถวหัวเอกสาร (ไม่มีกรอบ)
+            const lineHeight = 16;
+            let target = maxLines * lineHeight;
+
+            const minHeight = 20;
             if (target < minHeight) target = minHeight;
-            if (target > maxHeight) target = maxHeight;
+
+            if (process.platform === 'linux') {
+                target *= 1.05;
+            }
 
             row.height = target;
-            return;
         }
-
-        // 🟢 เคสหัวเอกสาร (ไม่มีกรอบ)
-        const base = (row.height && row.height > 0) ? row.height : 18;
-        const minHeight = 20;
-        const extraFactorPerLine = 0.85;
-
-        let target = base + (maxLines - 1) * base * extraFactorPerLine;
-
-        if (process.platform === 'linux') {
-            target *= 1.05;
-        }
-
-        if (target < minHeight) target = minHeight;
-        row.height = target;
     });
 }
 
