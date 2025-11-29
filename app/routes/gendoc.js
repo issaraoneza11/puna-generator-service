@@ -580,6 +580,7 @@ function expandArrayRows(ws, data) {
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
+        let hasBorder = false;
         let maxLines = 1;
 
         row.eachCell((cell, colNumber) => {
@@ -587,6 +588,12 @@ function autoAdjustRowHeightByWrap(ws) {
             if (!align.wrapText) return;
 
             hasWrap = true;
+
+            // เช็คว่ามีกรอบไหม ไว้แยก table กับหัวกระดาษ
+            const border = cell.border || {};
+            if (border.top || border.bottom || border.left || border.right) {
+                hasBorder = true;
+            }
 
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
@@ -602,28 +609,40 @@ function autoAdjustRowHeightByWrap(ws) {
             if (lines > maxLines) maxLines = lines;
         });
 
-        // ถ้าไม่มี cell ไหนเปิด wrap ก็ไม่ต้องทำอะไร
         if (!hasWrap) return;
 
         const base = (row.height && row.height > 0) ? row.height : 18;
-
-        // กันไม่ให้คิดว่ามีบรรทัดเยอะเกินไป จะสูงเวอร์
         const lines = Math.min(maxLines, 6);
 
-        // ยิ่ง factor น้อย แถวจะยิ่งเตี้ย
+        // 🟣 เคสหัวเอกสาร (ไม่มีกรอบ) – ใช้ factor สูงหน่อยให้ไม่ซ้อน
+        if (!hasBorder) {
+            const perLineFactor = 0.9;        // ยิ่งเยอะ ยิ่งสูง
+            let target = base + (lines - 1) * base * perLineFactor;
+
+            const minHeight = 22;             // กันไม่ให้เตี้ยเกิน
+            if (target < minHeight) target = minHeight;
+            if (process.platform === 'linux') {
+                target *= 1.03;
+            }
+
+            row.height = target;
+            return;
+        }
+
+        // 🟡 เคสใน table (มีกรอบ) – ให้เตี้ยกว่าหน่อย
         const perLineFactor = 0.4;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
         const minHeight = 18;
         if (target < minHeight) target = minHeight;
-
         if (process.platform === 'linux') {
-            target *= 1.03; // เผื่อเล็กน้อยบนลีนุกซ์
+            target *= 1.03;
         }
 
         row.height = target;
     });
 }
+
 
 
 
