@@ -303,9 +303,13 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     if (mainKeyPath) {
         applyDefaultStyle(cell);
 
-        // ตัดแบบ "label: value..." ให้ขึ้นหลายบรรทัดสวย ๆ
-        // จะมีผลกับ cell ที่เป็น "ชื่อลูกค้า: {{customer_name}}", "หมายเลขเอกสาร: {{doc_no}}" ฯลฯ
-        softWrapLabelValueCell(cell, 40);  // ปรับ 40 ได้ตามที่อยากให้ยาว/สั้น
+        // *** ปล่อยให้ LibreOffice จัด wrap เอง แค่เปิด wrapText ไว้พอ ***
+        const align = cell.alignment || {};
+        cell.alignment = {
+            ...align,
+            wrapText: true,
+            vertical: align.vertical || 'top',
+        };
 
         // ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้ (เผื่อเคสอื่น)
         if (typeof cell.value === 'string') {
