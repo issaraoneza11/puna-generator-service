@@ -603,7 +603,6 @@ function autoAdjustRowHeightByWrap(ws) {
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
-            // ---- ใช้ hardLines ถ้ามี \n ----
             const hardLines = text.split(/\r?\n/).length;
             let lines;
             if (hardLines > 1) {
@@ -620,15 +619,14 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!hasWrap) return;
 
-        const base = (row.height && row.height > 0) ? row.height : 18;
-        const lines = Math.min(maxLines, 6);
+        const lines = Math.min(maxLines, 8);
 
-        // 🟣 หัวเอกสาร (ไม่มีกรอบ)
+        // 🟣 หัวเอกสาร (ไม่มีกรอบ) → คิดความสูงใหม่ ไม่ใช้ row.height จาก template
         if (!hasBorder) {
-            const perLineFactor = IS_LINUX ? 0.6 : 0.8; // Linux ให้เตี้ยลงอีกหน่อย
-            let target = base + (lines - 1) * base * perLineFactor;
+            const perLine = IS_LINUX ? 14 : 16; // ลองปรับทีหลังได้
+            const minHeight = 18;
 
-            const minHeight = 20;
+            let target = perLine * lines;
             if (target < minHeight) target = minHeight;
             if (IS_LINUX) target *= 1.02;
 
@@ -636,7 +634,8 @@ function autoAdjustRowHeightByWrap(ws) {
             return;
         }
 
-        // 🟡 ใน table (มีกรอบ) – ใช้ค่าที่เคยโอเคอยู่แล้ว
+        // 🟡 ใน table (มีกรอบ) – ใช้ logic เดิม
+        const base = 18; // fix ฐาน ไม่นำ row.height เดิมมาคูณแล้ว
         const perLineFactor = 0.35;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
@@ -647,6 +646,7 @@ function autoAdjustRowHeightByWrap(ws) {
         row.height = target;
     });
 }
+
 
 
 
