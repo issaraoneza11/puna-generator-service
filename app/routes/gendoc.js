@@ -577,6 +577,8 @@ function expandArrayRows(ws, data) {
 
 
 
+const IS_LINUX = process.platform === 'linux';
+
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
@@ -589,7 +591,6 @@ function autoAdjustRowHeightByWrap(ws) {
 
             hasWrap = true;
 
-            // เช็คว่ามีกรอบไหม ไว้แยก table กับหัวกระดาษ
             const border = cell.border || {};
             if (border.top || border.bottom || border.left || border.right) {
                 hasBorder = true;
@@ -598,13 +599,17 @@ function autoAdjustRowHeightByWrap(ws) {
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
-            const col = ws.getColumn(colNumber);
-            const colCharWidth = col.width || 10;
-
-            // นับทั้งบรรทัดจริง (\n) และบรรทัดคาดเดาจากความยาว
+            // ---- ใช้ hardLines ถ้ามี \n ----
             const hardLines = text.split(/\r?\n/).length;
-            const softLines = Math.ceil(text.length / colCharWidth) || 1;
-            const lines = Math.max(hardLines, softLines);
+            let lines;
+            if (hardLines > 1) {
+                lines = hardLines;
+            } else {
+                const col = ws.getColumn(colNumber);
+                const colCharWidth = col.width || 10;
+                const softLines = Math.ceil(text.length / colCharWidth) || 1;
+                lines = Math.max(hardLines, softLines);
+            }
 
             if (lines > maxLines) maxLines = lines;
         });
@@ -614,34 +619,31 @@ function autoAdjustRowHeightByWrap(ws) {
         const base = (row.height && row.height > 0) ? row.height : 18;
         const lines = Math.min(maxLines, 6);
 
-        // 🟣 เคสหัวเอกสาร (ไม่มีกรอบ) – ใช้ factor สูงหน่อยให้ไม่ซ้อน
+        // 🟣 หัวเอกสาร (ไม่มีกรอบ)
         if (!hasBorder) {
-            const perLineFactor = 0.9;        // ยิ่งเยอะ ยิ่งสูง
+            const perLineFactor = IS_LINUX ? 0.6 : 0.8; // Linux ให้เตี้ยลงอีกหน่อย
             let target = base + (lines - 1) * base * perLineFactor;
 
-            const minHeight = 22;             // กันไม่ให้เตี้ยเกิน
+            const minHeight = 20;
             if (target < minHeight) target = minHeight;
-            if (process.platform === 'linux') {
-                target *= 1.03;
-            }
+            if (IS_LINUX) target *= 1.02;
 
             row.height = target;
             return;
         }
 
-        // 🟡 เคสใน table (มีกรอบ) – ให้เตี้ยกว่าหน่อย
-        const perLineFactor = 0.4;
+        // 🟡 ใน table (มีกรอบ) – ใช้ค่าที่เคยโอเคอยู่แล้ว
+        const perLineFactor = 0.35;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
         const minHeight = 18;
         if (target < minHeight) target = minHeight;
-        if (process.platform === 'linux') {
-            target *= 1.03;
-        }
+        if (IS_LINUX) target *= 1.03;
 
         row.height = target;
     });
 }
+
 
 
 
