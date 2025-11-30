@@ -733,7 +733,7 @@ async function fillXlsx(tplPath, data) {
         ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
 
         // 🔹 ดันความสูงแถวที่มี wrapText (โดยเฉพาะบน Linux)
-        autoAdjustRowHeightByWrap(ws);
+        /*  autoAdjustRowHeightByWrap(ws); */
 
         // บังคับฟอนต์ TH Sarabun ให้ทุก cell
         ws.eachRow(row => {
