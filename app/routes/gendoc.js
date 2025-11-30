@@ -724,11 +724,6 @@ async function fillXlsx(tplPath, data) {
             replaceTokensInCell(cell, data, defaultStyleByKey);
         }));
 
-        // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
-        ws.eachRow(row => row.eachCell(cell => {
-            softWrapLabelValueCell(cell, 40);   // 40 ตัว/บรรทัด ถ้าอยากให้ตบเร็วขึ้นลดเหลือ 30 ได้
-        }));
-
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
         if (IS_LINUX) {
             autoAdjustRowHeightByWrap(ws);
@@ -744,6 +739,7 @@ async function fillXlsx(tplPath, data) {
                 };
             });
         });
+
 
 
     });
