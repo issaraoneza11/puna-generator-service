@@ -709,11 +709,6 @@ async function fillXlsx(tplPath, data) {
             replaceTokensInCell(cell, data, defaultStyleByKey);
         }));
 
-        // 2) เคส label: value (เช่น "ชื่อลูกค้า: xxx") → บังคับตัดบรรทัดเอง
-        //    จะทำงานเฉพาะ cell ที่มี ":" แล้วตามด้วยข้อความยาวเกิน maxPerLine
-        ws.eachRow(row => row.eachCell(cell => {
-            softWrapLabelValueCell(cell, 40);   // ลอง 40 ตัวต่อบรรทัด ถ้ายังยาวไปค่อยลดเหลือ 30
-        }));
 
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
         if (IS_LINUX) {
