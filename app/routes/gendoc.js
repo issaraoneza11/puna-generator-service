@@ -770,9 +770,9 @@ async function fillXlsx(tplPath, data) {
         }));
 
         // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
-        ws.eachRow(row => row.eachCell((cell, colNumber) => {
-            smartWrapLabelValueCell(ws, cell, colNumber);
-        }));
+        /*  ws.eachRow(row => row.eachCell((cell, colNumber) => {
+             smartWrapLabelValueCell(ws, cell, colNumber);
+         })); */
 
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
         if (IS_LINUX) {
