@@ -71,7 +71,7 @@ function applyDefaultStyle(cell) {
         ...oldFont,
         // ถ้ามีของเดิมแล้ว จะไม่ทับ
         name: oldFont.name ?? 'TH SarabunPSK',
-        size: oldFont.size ?? 16,
+        size: oldFont.size ?? 11,
         color: oldFont.color ?? { argb: 'FF000000' },
         bold: oldFont.bold ?? false,
         italic: oldFont.italic ?? false,
@@ -307,27 +307,15 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     if (mainKeyPath) {
         applyDefaultStyle(cell);
 
-        // *** ปล่อยให้ LibreOffice จัด wrap เอง แค่เปิด wrapText ไว้พอ ***
         const align = cell.alignment || {};
         cell.alignment = {
             ...align,
-            wrapText: true,
+            // แตะแค่ vertical ให้ default เป็น top
             vertical: align.vertical || 'top',
+            // ❌ ไม่แตะ wrapText ตรงนี้แล้ว ปล่อยให้ได้จาก template หรือ style (w/nw)
         };
-
-        // ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้ (เผื่อเคสอื่น)
-        if (typeof cell.value === 'string') {
-            const align = cell.alignment || {};
-            const textLen = cell.value.length;
-            if (!align.wrapText && textLen > 40) {
-                cell.alignment = {
-                    ...align,
-                    wrapText: true,
-                    vertical: align.vertical || 'top',
-                };
-            }
-        }
     }
+
 
     if (mainKeyPath && !hasExplicitStyle) {
         const norm = normalizeKeyForStyle(mainKeyPath);
@@ -654,6 +642,9 @@ function autoAdjustRowHeightByWrap(ws) {
 
 function smartWrapLabelValueCell(ws, cell, colNumber) {
     if (!cell || typeof cell.value !== 'string') return;
+
+    const align = cell.alignment || {};
+    if (align.wrapText === false) return;
 
     const text = cell.value;
 
