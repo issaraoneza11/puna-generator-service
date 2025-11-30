@@ -10,6 +10,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const Excel = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+const { createCanvas } = require('canvas');
 async function checkPermissionUrl(url) {
     let arr_permission = [
         'http://localhost:3000/',
@@ -571,14 +572,22 @@ function expandArrayRows(ws, data) {
     }
 }
 
-
-
+const measureCanvas = createCanvas(1000, 100);
+const measureCtx = measureCanvas.getContext('2d');
+function measureTextWidthPx(text, fontSize, fontName = 'TH SarabunPSK') {
+    if (!text) return 0;
+    const size = Number(fontSize) || 16;
+    measureCtx.font = `${size}pt "${fontName}"`;
+    const metrics = measureCtx.measureText(text);
+    return metrics.width || 0;
+}
 const IS_LINUX = process.platform === 'linux';
 
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
         let maxLines = 1;
+        let maxFontSize = 0;
 
         row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
             const align = cell.alignment || {};
@@ -589,31 +598,36 @@ function autoAdjustRowHeightByWrap(ws) {
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
-            // 1) นับบรรทัดแบบมี \n จริง ๆ ก่อน
-            const hardLines = text.split(/\r?\n/).length;
+            const font = cell.font || {};
+            const fontSize = Number(font.size) || 16;
+            if (fontSize > maxFontSize) maxFontSize = fontSize;
 
-            // 2) ประมาณบรรทัดจากความยาวตัวอักษร / ความกว้างคอลัมน์
+            // รองรับข้อความมีหลายบรรทัดด้วย \n
+            const paragraphs = text.split(/\r?\n/);
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
+            const colPx = colWidth * 7; // ประมาณ 1 char ~ 7px
 
-            // ให้ 1 บรรทัดจุได้ประมาณ colWidth * 1.0 ตัว (เผื่อฟอนต์ไทย)
-            const estCharsPerLine = Math.max(1, Math.floor(colWidth * 1.0));
-            const softLines = Math.ceil(text.length / estCharsPerLine) || 1;
+            let totalLines = 0;
+            for (const p of paragraphs) {
+                if (!p) { totalLines += 1; continue; }
+                const wPx = measureTextWidthPx(p, fontSize, font.name || 'TH SarabunPSK');
+                const linesForPara = Math.max(1, Math.ceil(wPx / colPx));
+                totalLines += linesForPara;
+            }
 
-            const lines = Math.max(hardLines, softLines);
-
-            if (lines > maxLines) maxLines = lines;
+            if (totalLines > maxLines) maxLines = totalLines;
         });
 
         if (!hasWrap) return;
 
-        // ตั้งความสูงแถวแบบ linear ตามจำนวนบรรทัด
-        const baseHeight = 18;    // สูงสำหรับ 1 บรรทัด
-        const extraPerLine = 10;  // เพิ่มต่อบรรทัดเพิ่ม
+        if (!maxFontSize) maxFontSize = 16;
 
-        let target = baseHeight + (maxLines - 1) * extraPerLine;
+        // lineHeight คร่าว ๆ = fontSize * 1.2
+        const lineHeight = maxFontSize * 1.2;
+        const padding = 6;
+        let target = lineHeight * maxLines + padding;
 
-        // เผื่อ LibreOffice บน Linux ให้สูงขึ้นนิดนึง
         if (IS_LINUX) {
             target *= 1.05;
         }
@@ -621,6 +635,7 @@ function autoAdjustRowHeightByWrap(ws) {
         row.height = target;
     });
 }
+
 
 
 
