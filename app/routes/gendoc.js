@@ -586,62 +586,45 @@ const IS_LINUX = process.platform === 'linux';
 function autoAdjustRowHeightByWrap(ws) {
     ws.eachRow((row) => {
         let hasWrap = false;
-        let hasBorder = false;
         let maxLines = 1;
 
-        row.eachCell((cell, colNumber) => {
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
             const align = cell.alignment || {};
             if (!align.wrapText) return;
 
             hasWrap = true;
 
-            const border = cell.border || {};
-            if (border.top || border.bottom || border.left || border.right) {
-                hasBorder = true;
-            }
-
             const text = (typeof cell.value === 'string') ? cell.value : '';
             if (!text) return;
 
+            // 1) นับบรรทัดแบบมี \n จริง ๆ ก่อน
             const hardLines = text.split(/\r?\n/).length;
-            let lines;
-            if (hardLines > 1) {
-                lines = hardLines;
-            } else {
-                const col = ws.getColumn(colNumber);
-                const colCharWidth = col.width || 10;
-                const softLines = Math.ceil(text.length / colCharWidth) || 1;
-                lines = Math.max(hardLines, softLines);
-            }
+
+            // 2) ประมาณบรรทัดจากความยาวตัวอักษร / ความกว้างคอลัมน์
+            const col = ws.getColumn(colNumber);
+            const colWidth = col.width || 10;
+
+            // ให้ 1 บรรทัดจุได้ประมาณ colWidth * 1.0 ตัว (เผื่อฟอนต์ไทย)
+            const estCharsPerLine = Math.max(1, Math.floor(colWidth * 1.0));
+            const softLines = Math.ceil(text.length / estCharsPerLine) || 1;
+
+            const lines = Math.max(hardLines, softLines);
 
             if (lines > maxLines) maxLines = lines;
         });
 
         if (!hasWrap) return;
 
-        const lines = Math.min(maxLines, 8);
+        // ตั้งความสูงแถวแบบ linear ตามจำนวนบรรทัด
+        const baseHeight = 18;    // สูงสำหรับ 1 บรรทัด
+        const extraPerLine = 10;  // เพิ่มต่อบรรทัดเพิ่ม
 
-        // 🟣 หัวเอกสาร (ไม่มีกรอบ) → คิดความสูงใหม่ ไม่ใช้ row.height จาก template
-        if (!hasBorder) {
-            const perLine = IS_LINUX ? 14 : 16; // ลองปรับทีหลังได้
-            const minHeight = 18;
+        let target = baseHeight + (maxLines - 1) * extraPerLine;
 
-            let target = perLine * lines;
-            if (target < minHeight) target = minHeight;
-            if (IS_LINUX) target *= 1.02;
-
-            row.height = target;
-            return;
+        // เผื่อ LibreOffice บน Linux ให้สูงขึ้นนิดนึง
+        if (IS_LINUX) {
+            target *= 1.05;
         }
-
-        // 🟡 ใน table (มีกรอบ) – ใช้ logic เดิม
-        const base = 18; // fix ฐาน ไม่นำ row.height เดิมมาคูณแล้ว
-        const perLineFactor = 0.35;
-        let target = base * (1 + (lines - 1) * perLineFactor);
-
-        const minHeight = 18;
-        if (target < minHeight) target = minHeight;
-        if (IS_LINUX) target *= 1.03;
 
         row.height = target;
     });
@@ -733,7 +716,9 @@ async function fillXlsx(tplPath, data) {
         ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
 
         // 🔹 ดันความสูงแถวที่มี wrapText (โดยเฉพาะบน Linux)
-        /*  autoAdjustRowHeightByWrap(ws); */
+        if (IS_LINUX) {
+            autoAdjustRowHeightByWrap(ws);
+        }
 
         // บังคับฟอนต์ TH Sarabun ให้ทุก cell
         ws.eachRow(row => {
