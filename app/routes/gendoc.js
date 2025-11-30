@@ -69,9 +69,9 @@ function applyDefaultStyle(cell) {
 
     cell.font = {
         ...oldFont,
-        // ถ้ามีของเดิมแล้ว จะไม่ทับ
+        // ใช้ฟอนต์เดิมถ้ามี ถ้าไม่มีค่อยใช้ TH Sarabun
         name: oldFont.name ?? 'TH SarabunPSK',
-        size: oldFont.size ?? 11,
+        // ❌ ไม่ยุ่ง size เลย ปล่อยตาม template / fs:
         color: oldFont.color ?? { argb: 'FF000000' },
         bold: oldFont.bold ?? false,
         italic: oldFont.italic ?? false,
@@ -85,6 +85,7 @@ function applyDefaultStyle(cell) {
         wrapText: oldAlign.wrapText ?? false,
     };
 }
+
 
 
 function applyInlineStyle(cell, styleTokens) {
@@ -598,21 +599,17 @@ function autoAdjustRowHeightByWrap(ws) {
             if (!text) return;
 
             const font = cell.font || {};
-            const fontSize = Number(font.size) || 16;
+            const fontSize = Number(font.size) || 11; // เดิม 16
             if (fontSize > maxFontSize) maxFontSize = fontSize;
 
-            // แยกตาม \n ก่อน
             const paragraphs = text.split(/\r?\n/);
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
-
-            // ให้ 1 unit กว้างขึ้นหน่อย เพื่อลดจำนวนบรรทัดที่คำนวณได้
-            const colPx = colWidth * 8.5;  // เดิม 7 → 8.5
+            const colPx = colWidth * 8.5;
 
             let totalLines = 0;
             for (const p of paragraphs) {
                 if (!p) { totalLines += 1; continue; }
-
                 const wPx = measureTextWidthPx(p, fontSize, font.name || 'TH SarabunPSK');
                 const linesForPara = Math.max(1, Math.ceil(wPx / colPx));
                 totalLines += linesForPara;
@@ -623,16 +620,14 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!hasWrap) return;
 
-        if (!maxFontSize) maxFontSize = 16;
+        if (!maxFontSize) maxFontSize = 11;
 
-        // ทำให้แน่นขึ้นหน่อย
-        const lineHeight = maxFontSize * 1.05; // เดิม 1.2
-        const padding = 2;                     // เดิม 6
-
+        const lineHeight = maxFontSize * 1.0; // เดิม 1.05/1.2
+        const padding = 0;                     // เดิม 2/6
         let target = lineHeight * maxLines + padding;
 
         if (IS_LINUX) {
-            target *= 1.02; // เดิม 1.05
+            target *= 1.0;
         }
 
         row.height = target;
@@ -644,49 +639,44 @@ function smartWrapLabelValueCell(ws, cell, colNumber) {
     if (!cell || typeof cell.value !== 'string') return;
 
     const align = cell.alignment || {};
-    if (align.wrapText === false) return;
+
+    // ❗ ต้องเป็น true เท่านั้นถึงจะจัด wrap ให้
+    if (!align.wrapText) return;
 
     const text = cell.value;
 
-    // จับ pattern "อะไรสักอย่าง: <ช่องว่าง> ตามด้วยค่า"
     const m = text.match(/^(.*?:\s+)(.+)$/);
     if (!m) return;
 
-    const prefix = m[1]; // "ชื่อลูกค้า: "
-    const rest = m[2]; // ค่า customer_name ยาว ๆ
+    const prefix = m[1];
+    const rest = m[2];
 
     const col = ws.getColumn(colNumber);
     const colWidth = col.width || 10;
-    const colPx = colWidth * 7;   // ประมาณความกว้างคอลัมน์เป็น px
+    const colPx = colWidth * 7;
 
     const font = cell.font || {};
-    const fontSize = Number(font.size) || 16;
+    const fontSize = Number(font.size) || 11;
     const fontName = font.name || 'TH SarabunPSK';
 
-    // ถ้าทั้งก้อนยังไม่เกินความกว้างคอลัมน์ ก็ไม่ต้องยุ่ง
     if (measureTextWidthPx(text, fontSize, fontName) <= colPx) return;
 
     const lines = [];
-    let current = prefix;   // เริ่มบรรทัดแรกด้วย prefix
+    let current = prefix;
 
     for (const ch of rest) {
         const candidate = current + ch;
         const w = measureTextWidthPx(candidate, fontSize, fontName);
 
         if (w > colPx && current !== '') {
-            // ถ้าเกินความกว้างแล้ว → ปิดบรรทัดนี้ แล้วไปเริ่มบรรทัดใหม่
             lines.push(current.trimEnd());
-            current = ch; // บรรทัดถัดไปเริ่มจากตัวนี้เลย (ไม่ indent)
+            current = ch;
         } else {
             current += ch;
         }
     }
+    if (current) lines.push(current.trimEnd());
 
-    if (current) {
-        lines.push(current.trimEnd());
-    }
-
-    // ใส่ \n เอง → LibreOffice จะตามที่เราบอก
     cell.value = lines.join('\n');
 
     const oldAlign = cell.alignment || {};
