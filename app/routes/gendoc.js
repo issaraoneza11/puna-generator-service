@@ -652,6 +652,59 @@ function autoAdjustRowHeightByWrap(ws) {
 }
 
 
+function smartWrapLabelValueCell(ws, cell, colNumber) {
+    if (!cell || typeof cell.value !== 'string') return;
+
+    const text = cell.value;
+
+    // จับ pattern "อะไรสักอย่าง: <ช่องว่าง> ตามด้วยค่า"
+    const m = text.match(/^(.*?:\s+)(.+)$/);
+    if (!m) return;
+
+    const prefix = m[1]; // "ชื่อลูกค้า: "
+    const rest = m[2]; // ค่า customer_name ยาว ๆ
+
+    const col = ws.getColumn(colNumber);
+    const colWidth = col.width || 10;
+    const colPx = colWidth * 7;   // ประมาณความกว้างคอลัมน์เป็น px
+
+    const font = cell.font || {};
+    const fontSize = Number(font.size) || 16;
+    const fontName = font.name || 'TH SarabunPSK';
+
+    // ถ้าทั้งก้อนยังไม่เกินความกว้างคอลัมน์ ก็ไม่ต้องยุ่ง
+    if (measureTextWidthPx(text, fontSize, fontName) <= colPx) return;
+
+    const lines = [];
+    let current = prefix;   // เริ่มบรรทัดแรกด้วย prefix
+
+    for (const ch of rest) {
+        const candidate = current + ch;
+        const w = measureTextWidthPx(candidate, fontSize, fontName);
+
+        if (w > colPx && current !== '') {
+            // ถ้าเกินความกว้างแล้ว → ปิดบรรทัดนี้ แล้วไปเริ่มบรรทัดใหม่
+            lines.push(current.trimEnd());
+            current = ch; // บรรทัดถัดไปเริ่มจากตัวนี้เลย (ไม่ indent)
+        } else {
+            current += ch;
+        }
+    }
+
+    if (current) {
+        lines.push(current.trimEnd());
+    }
+
+    // ใส่ \n เอง → LibreOffice จะตามที่เราบอก
+    cell.value = lines.join('\n');
+
+    const oldAlign = cell.alignment || {};
+    cell.alignment = {
+        ...oldAlign,
+        wrapText: true,
+        vertical: oldAlign.vertical || 'top',
+    };
+}
 
 
 
@@ -736,7 +789,7 @@ async function fillXlsx(tplPath, data) {
 
         // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
         ws.eachRow(row => row.eachCell((cell, colNumber) => {
-            softWrapLabelValueCell(cell, colNumber);
+            smartWrapLabelValueCell(ws, cell, colNumber);
         }));
 
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
