@@ -172,25 +172,19 @@ function applyInlineStyle(cell, styleTokens) {
     }
 }
 
-// ตัดข้อความแบบ "label: value..." ให้ขึ้นหลายบรรทัด
-// เช่น "ชื่อลูกค้า: ddddddddddd..." -> 
-//   ชื่อลูกค้า: dddddddddd...
-//             dddddddddd...
 function softWrapLabelValueCell(cell, maxPerLine = 40) {
     if (!cell || typeof cell.value !== 'string') return;
 
     const text = cell.value;
 
-    // หา prefix ที่จบด้วย ":" + ช่องว่าง เช่น "ชื่อลูกค้า: "
     const m = text.match(/^(.*?:\s*)(.+)$/);
     if (!m) return; // ไม่ใช่ pattern label: value
 
-    const prefix = m[1];   // "ชื่อลูกค้า: "
-    const rest = m[2];     // ค่า ยาว ๆ
+    const prefix = m[1];
+    const rest = m[2];
 
-    if (rest.length <= maxPerLine) return; // สั้น ไม่ต้องตัด
+    if (rest.length <= maxPerLine) return;
 
-    // ตัด rest เป็นชิ้น ๆ ตามจำนวนตัวอักษร
     const chunks = [];
     let cur = '';
     for (const ch of rest) {
@@ -202,11 +196,10 @@ function softWrapLabelValueCell(cell, maxPerLine = 40) {
     }
     if (cur) chunks.push(cur);
 
-    // บรรทัดแรกติด prefix
     const lines = [];
     if (chunks.length > 0) {
         lines.push(prefix + chunks[0]);
-        const indent = ' '.repeat(prefix.length); // indent ตามความยาว prefix
+        const indent = ' '.repeat(prefix.length);
         for (let i = 1; i < chunks.length; i++) {
             lines.push(indent + chunks[i]);
         }
@@ -216,7 +209,6 @@ function softWrapLabelValueCell(cell, maxPerLine = 40) {
 
     cell.value = lines.join('\n');
 
-    // บังคับเปิด wrap ไว้ด้วย
     const align = cell.alignment || {};
     cell.alignment = {
         ...align,
@@ -712,10 +704,18 @@ async function fillXlsx(tplPath, data) {
 
         expandArrayRows(ws, data);
 
-        // แทนค่า + style จาก token
-        ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
+        // 1) แทนค่า + style จาก token
+        ws.eachRow(row => row.eachCell(cell => {
+            replaceTokensInCell(cell, data, defaultStyleByKey);
+        }));
 
-        // 🔹 ดันความสูงแถวที่มี wrapText (โดยเฉพาะบน Linux)
+        // 2) เคส label: value (เช่น "ชื่อลูกค้า: xxx") → บังคับตัดบรรทัดเอง
+        //    จะทำงานเฉพาะ cell ที่มี ":" แล้วตามด้วยข้อความยาวเกิน maxPerLine
+        ws.eachRow(row => row.eachCell(cell => {
+            softWrapLabelValueCell(cell, 40);   // ลอง 40 ตัวต่อบรรทัด ถ้ายังยาวไปค่อยลดเหลือ 30
+        }));
+
+        // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
         if (IS_LINUX) {
             autoAdjustRowHeightByWrap(ws);
         }
