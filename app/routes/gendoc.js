@@ -239,7 +239,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     let hasExplicitStyle = false;
 
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        const tokens = splitPlaceholder(inner);
+        const tokens = splitPlaceholder(inner);   // 👈 ใช้ฟังก์ชันใหม่
         if (tokens.length === 0) return '';
 
         const key = tokens[0];
@@ -249,7 +249,6 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         if (key.toLowerCase() === 'style') {
             hasExplicitStyle = true;
             if (styleTokens.length > 0) {
-                // 👇 ตรงนี้เท่านั้นที่มีสิทธิ์ set wrapText = true/false
                 applyInlineStyle(cell, styleTokens);
 
                 if (mainKeyPath) {
@@ -279,43 +278,63 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         return v;
     });
 
-    // --------------------------
-    // กรณีเป็น cell ของ array
-    // --------------------------
     if (hasArrayToken) {
-        // 👇 ไม่ยุ่ง wrapText อีกต่อไปแล้ว
-        // ให้ style (w / nw) เป็นคนตัดสินเอง
+        const oldAlign = cell.alignment || {};
+
+        cell.alignment = {
+            ...oldAlign,
+            wrapText: true,
+            vertical: oldAlign.vertical || 'top',
+        };
+
         cell.border = {
             top: { style: 'thin' },
             left: { style: 'thin' },
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
+
         return;
     }
 
-    // --------------------------
+
+
     // cell ปกติ
-    // --------------------------
     if (mainKeyPath) {
-        // default style: ฟอนต์ / align พื้นฐาน แต่ **ไม่แตะ wrapText**
         applyDefaultStyle(cell);
+
+        // *** ปล่อยให้ LibreOffice จัด wrap เอง แค่เปิด wrapText ไว้พอ ***
+        const align = cell.alignment || {};
+        cell.alignment = {
+            ...align,
+            wrapText: true,
+            vertical: align.vertical || 'top',
+        };
+
+        // ถ้าข้อความยาว และยังไม่เปิด wrapText → บังคับเปิดให้ (เผื่อเคสอื่น)
+        if (typeof cell.value === 'string') {
+            const align = cell.alignment || {};
+            const textLen = cell.value.length;
+            if (!align.wrapText && textLen > 40) {
+                cell.alignment = {
+                    ...align,
+                    wrapText: true,
+                    vertical: align.vertical || 'top',
+                };
+            }
+        }
     }
 
-    // ถ้ามี default style ที่เคยเซ็ตจาก {{style|...}} ของ key นี้
     if (mainKeyPath && !hasExplicitStyle) {
         const norm = normalizeKeyForStyle(mainKeyPath);
         const defTokens = defaultStyleByKey[norm];
         if (defTokens && defTokens.length > 0) {
-            // 👇 ถ้าใน defTokens มี w หรือ nw มันจะไปตั้ง wrapText ที่นี่
             applyInlineStyle(cell, defTokens);
         }
     }
 
-    // ❌ ลบ logic ที่เคย "auto wrap ถ้ายาว > 40" ทิ้งแล้ว
-    // ❌ ไม่ตั้ง wrapText = true ให้อีกต่อไป
-}
 
+}
 
 
 
@@ -658,33 +677,60 @@ async function fillXlsx(tplPath, data) {
     const opt = { ...defaultOpt, ...(data.__options || {}) };
 
     const paperMap = { A3: 8, A4: 9, A5: 11, Letter: 1 };
+
     wb.eachSheet(ws => {
         ws.pageSetup.paperSize = paperMap[opt.paperSize] || 9;
         ws.pageSetup.orientation = mapOrientation(opt.orientation);
-        // ... margin ต่าง ๆ เหมือนเดิม ...
+
+        // ----------------------
+        // รองรับ margin ทั้งแบบตัวเดียว และแบบ object 4 ด้าน
+        // ----------------------
+        const margin = opt.margin ?? 0;
+
+        let marginLeft, marginRight, marginTop, marginBottom;
+
+        if (margin && typeof margin === 'object') {
+            marginLeft = Number(margin.left ?? 0) || 0;
+            marginRight = Number(margin.right ?? 0) || 0;
+            marginTop = Number(margin.top ?? 0) || 0;
+            marginBottom = Number(margin.bottom ?? 0) || 0;
+        } else {
+            const m = Number(margin) || 0;
+            marginLeft = marginRight = marginTop = marginBottom = m;
+        }
+
+        // 🔹 auto ปรับ margin ตามตำแหน่งเลขหน้า (หน่วย = นิ้ว)
+        if (opt.pageNumber) {
+            const pos = normalizePos(opt.pageNumberPosition || 'bottom-center');
+            const MIN_TOP = 0.4;     // ~1.8cm
+            const MIN_BOTTOM = 0.4;  // ~1.8cm
+
+            if (pos.startsWith('top') && marginTop < MIN_TOP) {
+                marginTop = MIN_TOP;
+            }
+            if (pos.startsWith('bottom') && marginBottom < MIN_BOTTOM) {
+                marginBottom = MIN_BOTTOM;
+            }
+        }
+
+        // ✅ ค่อยเซ็ต margin เข้า Excel หลังปรับเสร็จแล้ว
+        ws.pageSetup.margins = {
+            left: marginLeft,
+            right: marginRight,
+            top: marginTop,
+            bottom: marginBottom,
+            header: Math.max(marginTop, 0.3),
+            footer: Math.max(marginBottom, 1),
+        };
+
+        if (opt.repeatHeaderRows) {
+            ws.pageSetup.printTitlesRow = opt.repeatHeaderRows;
+        }
 
         expandArrayRows(ws, data);
 
         // แทนค่า + style จาก token
         ws.eachRow(row => row.eachCell(cell => replaceTokensInCell(cell, data, defaultStyleByKey)));
-
-        // 🔹 จัด label: value ให้บาลานเฉพาะ cell ที่ wrap (style|w)
-        // หลัง replaceTokensInCell
-        ws.eachRow(row => {
-            row.eachCell(cell => {
-                if (typeof cell.value !== 'string') return;
-
-                const align = cell.alignment || {};
-                if (!align.wrapText) return;          // ต้องมี style|w ก่อน
-
-                if (cell.value.includes('\n')) return; // ถ้ามี \n อยู่แล้วไม่ยุ่ง
-
-                if (!/.*:\s+.+/.test(cell.value)) return; // ต้องเป็น "xxx: yyy"
-
-                softWrapLabelValueCell(cell, 40);
-            });
-        });
-
 
         // 🔹 ดันความสูงแถวที่มี wrapText (โดยเฉพาะบน Linux)
         autoAdjustRowHeightByWrap(ws);
@@ -699,9 +745,8 @@ async function fillXlsx(tplPath, data) {
                 };
             });
         });
+
     });
-
-
 
 
     const outXlsx = path.join(os.tmpdir(), `filled_${Date.now()}.xlsx`);
