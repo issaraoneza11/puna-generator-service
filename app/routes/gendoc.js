@@ -238,19 +238,17 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     if (typeof cell.value !== 'string') return;
 
     let hasArrayToken = false;
-
-    // state ต่อ 1 cell
     let mainKeyPath = null;
     let hasExplicitStyle = false;
 
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        const tokens = splitPlaceholder(inner);   // 👈 ใช้ฟังก์ชันใหม่
+        const tokens = splitPlaceholder(inner);
         if (tokens.length === 0) return '';
 
         const key = tokens[0];
         const styleTokens = tokens.slice(1);
 
-        // 1) style
+        // style
         if (key.toLowerCase() === 'style') {
             hasExplicitStyle = true;
             if (styleTokens.length > 0) {
@@ -264,7 +262,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             return '';
         }
 
-        // 2) fx
+        // fx
         if (key.toLowerCase() === 'fx') {
             const result = evalFxFormula(styleTokens, data);
             if (styleTokens.some(t => /\[\d+\]/.test(t))) {
@@ -273,7 +271,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             return String(result ?? '');
         }
 
-        // 3) ปกติ: data path
+        // data path ปกติ
         const keyPath = key;
         mainKeyPath = mainKeyPath || keyPath;
 
@@ -283,14 +281,13 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         return v;
     });
 
+    // ---------- เคส array (เช่น goog[0].no) ----------
     if (hasArrayToken) {
         const oldAlign = cell.alignment || {};
 
         cell.alignment = {
             ...oldAlign,
-            // เดิมเขียน wrapText: true,
-            // แก้เป็นเซ็ตเฉพาะตอนยังไม่ได้ตั้งค่า
-            ...(oldAlign.wrapText === undefined ? { wrapText: true } : {}),
+            wrapText: true,                    // บังคับให้ห่อบรรทัด
             vertical: oldAlign.vertical || 'top',
         };
 
@@ -300,12 +297,12 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
+
+        // ❗ สำคัญ: ไม่ให้ไปเข้าบล็อก "cell ปกติ" ต่อ
+        return;
     }
 
-
-
-    // cell ปกติ
-    // cell ปกติ
+    // ---------- cell ปกติ ----------
     if (mainKeyPath) {
         applyDefaultStyle(cell);
 
@@ -313,7 +310,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         cell.alignment = {
             ...align,
             vertical: align.vertical || 'top',
-            // ไม่ไปยุ่ง wrapText ตรงนี้ เพื่อให้ได้ค่าจาก template หรือ style (w / nw)
+            // ไม่แตะ wrapText ตรงนี้ ให้มาจาก template หรือ {{style|w/nw}}
         };
     }
 
@@ -324,10 +321,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             applyInlineStyle(cell, defTokens);
         }
     }
-
-
 }
-
 
 
 function isQuoted(str) {
@@ -587,8 +581,15 @@ function autoAdjustRowHeightByWrap(ws) {
         let hasWrap = false;
         let maxLines = 1;
         let maxFontSize = 0;
+        let isTableRow = false;
 
         row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            // เช็คว่ามี border ไหม -> ถือว่าเป็นแถวใน table
+            const b = cell.border || {};
+            if (b.top || b.bottom || b.left || b.right) {
+                isTableRow = true;
+            }
+
             const align = cell.alignment || {};
             if (!align.wrapText) return;
 
@@ -598,13 +599,15 @@ function autoAdjustRowHeightByWrap(ws) {
             if (!text) return;
 
             const font = cell.font || {};
-            const fontSize = Number(font.size) || 11; // เดิม 16
+            const fontSize = Number(font.size) || 11;
             if (fontSize > maxFontSize) maxFontSize = fontSize;
 
             const paragraphs = text.split(/\r?\n/);
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
-            const colPx = colWidth * 7.2;
+
+            // จงใจให้คิดว่าคอลัมน์แคบลงหน่อย จะได้เผื่อบรรทัดเกิน
+            const colPx = colWidth * 6.5;
 
             let totalLines = 0;
             for (const p of paragraphs) {
@@ -617,18 +620,17 @@ function autoAdjustRowHeightByWrap(ws) {
             if (totalLines > maxLines) maxLines = totalLines;
         });
 
-        if (!hasWrap) return;
+        // ถ้าไม่ใช่ table row เลย → ไม่ยุ่ง ปล่อย default
+        if (!isTableRow || !hasWrap) return;
 
         if (!maxFontSize) maxFontSize = 11;
 
-        // ให้ lineHeight สูงขึ้นนิดหน่อย + padding เล็กน้อย
-        const lineHeight = maxFontSize * 1.1;
-        const padding = 2;
-
+        const lineHeight = maxFontSize * 1.25;
+        const padding = 4;
         let target = lineHeight * maxLines + padding;
 
         if (IS_LINUX) {
-            target *= 1.02;   // เผื่อให้ Linux อีกนิด
+            target *= 1.05;
         }
 
         row.height = target;
