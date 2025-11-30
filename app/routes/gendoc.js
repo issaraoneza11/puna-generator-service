@@ -580,11 +580,10 @@ function expandArrayRows(ws, data) {
 }
 
 
-
 const IS_LINUX = process.platform === 'linux';
 
 function autoAdjustRowHeightByWrap(ws) {
-    // 🟢 บน Windows ปล่อยให้ Excel / LibreOffice จัดการเอง
+    // Windows → ไม่ยุ่งเลย
     if (!IS_LINUX) return;
 
     ws.eachRow((row) => {
@@ -614,8 +613,6 @@ function autoAdjustRowHeightByWrap(ws) {
             } else {
                 const col = ws.getColumn(colNumber);
                 const colCharWidth = col.width || 10;
-
-                // ให้หนึ่งบรรทัดรับตัวอักษรได้มากกว่าปกติหน่อย (เผื่อฟอนต์ไทย)
                 const capacity = colCharWidth * 1.8;
                 const softLines = Math.ceil(text.length / capacity) || 1;
                 lines = Math.max(hardLines, softLines);
@@ -626,15 +623,16 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!hasWrap) return;
 
-        // 🔵 แถวหัวเอกสาร (ไม่มีกรอบ) → ใช้ความสูง fix ไม่ให้ยืดตามความยาว
+        // 🔵 แถวหัวเอกสาร (ไม่มีกรอบ) → ใช้ความสูง “จาก template” หรือ default ต่ำ ๆ
         if (!hasBorder) {
-            // ปรับเลขนี้ตามฟีล ถ้าอยากให้สูงขึ้น/เตี้ยลง
-            const HEADER_HEIGHT = 20;
-            row.height = HEADER_HEIGHT;
+            // ถ้า template ไม่ได้กำหนดไว้ (row.height = undefined) ให้ใส่ค่าเตี้ย ๆ แทน
+            if (!row.height || row.height < 15) {
+                row.height = 15;   // ลอง 14–16 ตามที่ตัวชอบ
+            }
             return;
         }
 
-        // 🟡 แถวในตาราง (มีกรอบ) – ใช้ logic เดิม แต่เฉพาะบน Linux
+        // 🟡 แถวในตาราง (มีกรอบ) – auto ตามจำนวนบรรทัด
         const lines = Math.min(maxLines, 8);
 
         const base = 18;
@@ -648,13 +646,6 @@ function autoAdjustRowHeightByWrap(ws) {
         row.height = target;
     });
 }
-
-
-
-
-
-
-
 
 
 
