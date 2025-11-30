@@ -580,12 +580,10 @@ function expandArrayRows(ws, data) {
 }
 
 
+
 const IS_LINUX = process.platform === 'linux';
 
 function autoAdjustRowHeightByWrap(ws) {
-    // Windows → ไม่ยุ่งเลย
-    if (!IS_LINUX) return;
-
     ws.eachRow((row) => {
         let hasWrap = false;
         let hasBorder = false;
@@ -607,14 +605,12 @@ function autoAdjustRowHeightByWrap(ws) {
 
             const hardLines = text.split(/\r?\n/).length;
             let lines;
-
             if (hardLines > 1) {
                 lines = hardLines;
             } else {
                 const col = ws.getColumn(colNumber);
                 const colCharWidth = col.width || 10;
-                const capacity = colCharWidth * 1.8;
-                const softLines = Math.ceil(text.length / capacity) || 1;
+                const softLines = Math.ceil(text.length / colCharWidth) || 1;
                 lines = Math.max(hardLines, softLines);
             }
 
@@ -623,29 +619,38 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!hasWrap) return;
 
-        // 🔵 แถวหัวเอกสาร (ไม่มีกรอบ) → ใช้ความสูง “จาก template” หรือ default ต่ำ ๆ
+        const lines = Math.min(maxLines, 8);
+
+        // 🟣 หัวเอกสาร (ไม่มีกรอบ) → คิดความสูงใหม่ ไม่ใช้ row.height จาก template
         if (!hasBorder) {
-            // ถ้า template ไม่ได้กำหนดไว้ (row.height = undefined) ให้ใส่ค่าเตี้ย ๆ แทน
-            if (!row.height || row.height < 15) {
-                row.height = 15;   // ลอง 14–16 ตามที่ตัวชอบ
-            }
+            const perLine = IS_LINUX ? 14 : 16; // ลองปรับทีหลังได้
+            const minHeight = 18;
+
+            let target = perLine * lines;
+            if (target < minHeight) target = minHeight;
+            if (IS_LINUX) target *= 1.02;
+
+            row.height = target;
             return;
         }
 
-        // 🟡 แถวในตาราง (มีกรอบ) – auto ตามจำนวนบรรทัด
-        const lines = Math.min(maxLines, 8);
-
-        const base = 18;
+        // 🟡 ใน table (มีกรอบ) – ใช้ logic เดิม
+        const base = 18; // fix ฐาน ไม่นำ row.height เดิมมาคูณแล้ว
         const perLineFactor = 0.35;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
         const minHeight = 18;
         if (target < minHeight) target = minHeight;
-        target *= 1.03; // เผื่อ LibreOffice บน Linux
+        if (IS_LINUX) target *= 1.03;
 
         row.height = target;
     });
 }
+
+
+
+
+
 
 
 
