@@ -174,39 +174,49 @@ function applyInlineStyle(cell, styleTokens) {
     }
 }
 
-function softWrapLabelValueCell(cell, maxPerLine = 40) {
+function softWrapLabelValueCell(cell, colNumber) {
     if (!cell || typeof cell.value !== 'string') return;
 
     const text = cell.value;
 
+    // จับ pattern "label: value"
     const m = text.match(/^(.*?:\s*)(.+)$/);
-    if (!m) return; // ไม่ใช่ pattern label: value
+    if (!m) return;
 
     const prefix = m[1];
     const rest = m[2];
 
-    if (rest.length <= maxPerLine) return;
+    if (!rest) return;
 
-    const chunks = [];
-    let cur = '';
-    for (const ch of rest) {
-        cur += ch;
-        if (cur.length >= maxPerLine) {
-            chunks.push(cur);
-            cur = '';
-        }
-    }
-    if (cur) chunks.push(cur);
+    // ความกว้างคอลัมน์ (หน่วยของ exceljs) → แปลงคร่าว ๆ เป็น pixel
+    const ws = cell.worksheet;
+    const col = ws.getColumn(colNumber);
+    const colWidth = col.width || 10;
+    const colPx = colWidth * 7; // ประมาณการ: 1 unit ~ 7px
+
+    const font = cell.font || {};
+    const fontSize = Number(font.size) || 16;
+    const fontName = font.name || 'TH SarabunPSK';
 
     const lines = [];
-    if (chunks.length > 0) {
-        lines.push(prefix + chunks[0]);
-        const indent = ' '.repeat(prefix.length);
-        for (let i = 1; i < chunks.length; i++) {
-            lines.push(indent + chunks[i]);
+    let current = prefix;
+
+    for (const ch of rest) {
+        const candidate = current + ch;
+        const w = measureTextWidthPx(candidate, fontSize, fontName);
+
+        // ถ้าเกินความกว้าง cell แล้ว และ current มีตัวมากกว่าพวก prefix → ตัดบรรทัด
+        if (w > colPx && current !== prefix) {
+            lines.push(current);
+            // บรรทัดใหม่: indent ด้วยช่องว่างเท่ากับ prefix
+            const indent = ' '.repeat(prefix.length);
+            current = indent + ch;
+        } else {
+            current = candidate;
         }
-    } else {
-        lines.push(text);
+    }
+    if (current) {
+        lines.push(current);
     }
 
     cell.value = lines.join('\n');
@@ -584,59 +594,61 @@ function measureTextWidthPx(text, fontSize, fontName = 'TH SarabunPSK') {
 }
 const IS_LINUX = process.platform === 'linux';
 
-function softWrapLabelValueCell(cell, colNumber) {
-    if (!cell || typeof cell.value !== 'string') return;
+function autoAdjustRowHeightByWrap(ws) {
+    ws.eachRow((row) => {
+        let hasWrap = false;
+        let maxLines = 1;
+        let maxFontSize = 0;
 
-    const text = cell.value;
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const align = cell.alignment || {};
+            if (!align.wrapText) return;
 
-    // จับ pattern "label: value"
-    const m = text.match(/^(.*?:\s*)(.+)$/);
-    if (!m) return;
+            hasWrap = true;
 
-    const prefix = m[1];
-    const rest = m[2];
+            const text = (typeof cell.value === 'string') ? cell.value : '';
+            if (!text) return;
 
-    if (!rest) return;
+            const font = cell.font || {};
+            const fontSize = Number(font.size) || 16;
+            if (fontSize > maxFontSize) maxFontSize = fontSize;
 
-    // ความกว้างคอลัมน์ (หน่วยของ exceljs) → แปลงคร่าว ๆ เป็น pixel
-    const ws = cell.worksheet;
-    const col = ws.getColumn(colNumber);
-    const colWidth = col.width || 10;
-    const colPx = colWidth * 7; // ประมาณการ: 1 unit ~ 7px
+            // แยกตาม \n ก่อน
+            const paragraphs = text.split(/\r?\n/);
+            const col = ws.getColumn(colNumber);
+            const colWidth = col.width || 10;
 
-    const font = cell.font || {};
-    const fontSize = Number(font.size) || 16;
-    const fontName = font.name || 'TH SarabunPSK';
+            // ให้ 1 unit กว้างขึ้นหน่อย เพื่อลดจำนวนบรรทัดที่คำนวณได้
+            const colPx = colWidth * 8.5;  // เดิม 7 → 8.5
 
-    const lines = [];
-    let current = prefix;
+            let totalLines = 0;
+            for (const p of paragraphs) {
+                if (!p) { totalLines += 1; continue; }
 
-    for (const ch of rest) {
-        const candidate = current + ch;
-        const w = measureTextWidthPx(candidate, fontSize, fontName);
+                const wPx = measureTextWidthPx(p, fontSize, font.name || 'TH SarabunPSK');
+                const linesForPara = Math.max(1, Math.ceil(wPx / colPx));
+                totalLines += linesForPara;
+            }
 
-        // ถ้าเกินความกว้าง cell แล้ว และ current มีตัวมากกว่าพวก prefix → ตัดบรรทัด
-        if (w > colPx && current !== prefix) {
-            lines.push(current);
-            // บรรทัดใหม่: indent ด้วยช่องว่างเท่ากับ prefix
-            const indent = ' '.repeat(prefix.length);
-            current = indent + ch;
-        } else {
-            current = candidate;
+            if (totalLines > maxLines) maxLines = totalLines;
+        });
+
+        if (!hasWrap) return;
+
+        if (!maxFontSize) maxFontSize = 16;
+
+        // ทำให้แน่นขึ้นหน่อย
+        const lineHeight = maxFontSize * 1.05; // เดิม 1.2
+        const padding = 2;                     // เดิม 6
+
+        let target = lineHeight * maxLines + padding;
+
+        if (IS_LINUX) {
+            target *= 1.02; // เดิม 1.05
         }
-    }
-    if (current) {
-        lines.push(current);
-    }
 
-    cell.value = lines.join('\n');
-
-    const align = cell.alignment || {};
-    cell.alignment = {
-        ...align,
-        wrapText: true,
-        vertical: align.vertical || 'top',
-    };
+        row.height = target;
+    });
 }
 
 
@@ -723,8 +735,8 @@ async function fillXlsx(tplPath, data) {
         }));
 
         // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
-        ws.eachRow(row => row.eachCell(cell => {
-            softWrapLabelValueCell(cell, 40);   // 40 ตัว/บรรทัด ถ้าอยากให้ตบเร็วขึ้นลดเหลือ 30 ได้
+        ws.eachRow(row => row.eachCell((cell, colNumber) => {
+            softWrapLabelValueCell(cell, colNumber);
         }));
 
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
