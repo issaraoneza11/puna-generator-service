@@ -299,11 +299,12 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             right: { style: 'thin' },
         };
 
-        return;
+
     }
 
 
 
+    // cell ปกติ
     // cell ปกติ
     if (mainKeyPath) {
         applyDefaultStyle(cell);
@@ -311,12 +312,10 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         const align = cell.alignment || {};
         cell.alignment = {
             ...align,
-            // แตะแค่ vertical ให้ default เป็น top
             vertical: align.vertical || 'top',
-            // ❌ ไม่แตะ wrapText ตรงนี้แล้ว ปล่อยให้ได้จาก template หรือ style (w/nw)
+            // ไม่ไปยุ่ง wrapText ตรงนี้ เพื่อให้ได้ค่าจาก template หรือ style (w / nw)
         };
     }
-
 
     if (mainKeyPath && !hasExplicitStyle) {
         const norm = normalizeKeyForStyle(mainKeyPath);
