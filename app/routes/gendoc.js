@@ -605,6 +605,7 @@ function autoAdjustRowHeightByWrap(ws) {
 
             const hardLines = text.split(/\r?\n/).length;
             let lines;
+
             if (hardLines > 1) {
                 lines = hardLines;
             } else {
@@ -621,21 +622,14 @@ function autoAdjustRowHeightByWrap(ws) {
 
         const lines = Math.min(maxLines, 8);
 
-        // 🟣 หัวเอกสาร (ไม่มีกรอบ) → คิดความสูงใหม่ ไม่ใช้ row.height จาก template
+        // 🔴 เปลี่ยนตรงนี้
+        // ถ้าไม่มีกรอบ (หัวเอกสาร) → ไม่ยุ่งกับ row.height เลย
         if (!hasBorder) {
-            const perLine = IS_LINUX ? 14 : 16; // ลองปรับทีหลังได้
-            const minHeight = 18;
-
-            let target = perLine * lines;
-            if (target < minHeight) target = minHeight;
-            if (IS_LINUX) target *= 1.02;
-
-            row.height = target;
-            return;
+            return;   // ใช้ค่า height เดิมจาก template ตรง ๆ
         }
 
         // 🟡 ใน table (มีกรอบ) – ใช้ logic เดิม
-        const base = 18; // fix ฐาน ไม่นำ row.height เดิมมาคูณแล้ว
+        const base = 18;
         const perLineFactor = 0.35;
         let target = base * (1 + (lines - 1) * perLineFactor);
 
@@ -646,6 +640,7 @@ function autoAdjustRowHeightByWrap(ws) {
         row.height = target;
     });
 }
+
 
 
 
