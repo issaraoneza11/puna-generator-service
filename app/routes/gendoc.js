@@ -584,61 +584,59 @@ function measureTextWidthPx(text, fontSize, fontName = 'TH SarabunPSK') {
 }
 const IS_LINUX = process.platform === 'linux';
 
-function autoAdjustRowHeightByWrap(ws) {
-    ws.eachRow((row) => {
-        let hasWrap = false;
-        let maxLines = 1;
-        let maxFontSize = 0;
+function softWrapLabelValueCell(cell, colNumber) {
+    if (!cell || typeof cell.value !== 'string') return;
 
-        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-            const align = cell.alignment || {};
-            if (!align.wrapText) return;
+    const text = cell.value;
 
-            hasWrap = true;
+    // จับ pattern "label: value"
+    const m = text.match(/^(.*?:\s*)(.+)$/);
+    if (!m) return;
 
-            const text = (typeof cell.value === 'string') ? cell.value : '';
-            if (!text) return;
+    const prefix = m[1];
+    const rest = m[2];
 
-            const font = cell.font || {};
-            const fontSize = Number(font.size) || 16;
-            if (fontSize > maxFontSize) maxFontSize = fontSize;
+    if (!rest) return;
 
-            // แยกตาม \n ก่อน
-            const paragraphs = text.split(/\r?\n/);
-            const col = ws.getColumn(colNumber);
-            const colWidth = col.width || 10;
+    // ความกว้างคอลัมน์ (หน่วยของ exceljs) → แปลงคร่าว ๆ เป็น pixel
+    const ws = cell.worksheet;
+    const col = ws.getColumn(colNumber);
+    const colWidth = col.width || 10;
+    const colPx = colWidth * 7; // ประมาณการ: 1 unit ~ 7px
 
-            // ให้ 1 unit กว้างขึ้นหน่อย เพื่อลดจำนวนบรรทัดที่คำนวณได้
-            const colPx = colWidth * 8.5;  // เดิม 7 → 8.5
+    const font = cell.font || {};
+    const fontSize = Number(font.size) || 16;
+    const fontName = font.name || 'TH SarabunPSK';
 
-            let totalLines = 0;
-            for (const p of paragraphs) {
-                if (!p) { totalLines += 1; continue; }
+    const lines = [];
+    let current = prefix;
 
-                const wPx = measureTextWidthPx(p, fontSize, font.name || 'TH SarabunPSK');
-                const linesForPara = Math.max(1, Math.ceil(wPx / colPx));
-                totalLines += linesForPara;
-            }
+    for (const ch of rest) {
+        const candidate = current + ch;
+        const w = measureTextWidthPx(candidate, fontSize, fontName);
 
-            if (totalLines > maxLines) maxLines = totalLines;
-        });
-
-        if (!hasWrap) return;
-
-        if (!maxFontSize) maxFontSize = 16;
-
-        // ทำให้แน่นขึ้นหน่อย
-        const lineHeight = maxFontSize * 1.05; // เดิม 1.2
-        const padding = 2;                     // เดิม 6
-
-        let target = lineHeight * maxLines + padding;
-
-        if (IS_LINUX) {
-            target *= 1.02; // เดิม 1.05
+        // ถ้าเกินความกว้าง cell แล้ว และ current มีตัวมากกว่าพวก prefix → ตัดบรรทัด
+        if (w > colPx && current !== prefix) {
+            lines.push(current);
+            // บรรทัดใหม่: indent ด้วยช่องว่างเท่ากับ prefix
+            const indent = ' '.repeat(prefix.length);
+            current = indent + ch;
+        } else {
+            current = candidate;
         }
+    }
+    if (current) {
+        lines.push(current);
+    }
 
-        row.height = target;
-    });
+    cell.value = lines.join('\n');
+
+    const align = cell.alignment || {};
+    cell.alignment = {
+        ...align,
+        wrapText: true,
+        vertical: align.vertical || 'top',
+    };
 }
 
 
@@ -724,6 +722,11 @@ async function fillXlsx(tplPath, data) {
             replaceTokensInCell(cell, data, defaultStyleByKey);
         }));
 
+        // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
+        ws.eachRow(row => row.eachCell(cell => {
+            softWrapLabelValueCell(cell, 40);   // 40 ตัว/บรรทัด ถ้าอยากให้ตบเร็วขึ้นลดเหลือ 30 ได้
+        }));
+
         // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
         if (IS_LINUX) {
             autoAdjustRowHeightByWrap(ws);
@@ -739,7 +742,6 @@ async function fillXlsx(tplPath, data) {
                 };
             });
         });
-
 
 
     });
