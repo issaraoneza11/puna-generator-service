@@ -288,7 +288,9 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
 
         cell.alignment = {
             ...oldAlign,
-            wrapText: true,
+            // เดิมเขียน wrapText: true,
+            // แก้เป็นเซ็ตเฉพาะตอนยังไม่ได้ตั้งค่า
+            ...(oldAlign.wrapText === undefined ? { wrapText: true } : {}),
             vertical: oldAlign.vertical || 'top',
         };
 
@@ -298,8 +300,6 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             bottom: { style: 'thin' },
             right: { style: 'thin' },
         };
-
-
     }
 
 
@@ -604,7 +604,7 @@ function autoAdjustRowHeightByWrap(ws) {
             const paragraphs = text.split(/\r?\n/);
             const col = ws.getColumn(colNumber);
             const colWidth = col.width || 10;
-            const colPx = colWidth * 8.5;
+            const colPx = colWidth * 7.2;
 
             let totalLines = 0;
             for (const p of paragraphs) {
@@ -621,12 +621,14 @@ function autoAdjustRowHeightByWrap(ws) {
 
         if (!maxFontSize) maxFontSize = 11;
 
-        const lineHeight = maxFontSize * 1.0; // เดิม 1.05/1.2
-        const padding = 0;                     // เดิม 2/6
+        // ให้ lineHeight สูงขึ้นนิดหน่อย + padding เล็กน้อย
+        const lineHeight = maxFontSize * 1.1;
+        const padding = 2;
+
         let target = lineHeight * maxLines + padding;
 
         if (IS_LINUX) {
-            target *= 1.0;
+            target *= 1.02;   // เผื่อให้ Linux อีกนิด
         }
 
         row.height = target;
