@@ -813,7 +813,10 @@ async function fillXlsx(tplPath, data) {
         }
         return w;
     }
-
+    function mmToInch(v) {
+        const n = Number(v) || 0;
+        return n / 25.4;
+    }
     function autoScaleToFitWidth(ws, opt, marginLeft, marginRight) {
         const paperWidthInches = getPaperWidthInches(opt.paperSize || 'A4', opt.orientation || 'portrait');
         const printableWidthInches = Math.max(
@@ -845,20 +848,25 @@ async function fillXlsx(tplPath, data) {
         if (opt.forceSinglePage) {
             ws.pageSetup.fitToPage = true;
             ws.pageSetup.fitToWidth = 1;
-            ws.pageSetup.fitToHeight = 1;
-            ws.pageSetup.scale = undefined; // ปล่อยให้ Excel คิดเอง
+            ws.pageSetup.fitToHeight = 0;
+            ws.pageSetup.scale = undefined;
             return;
         }
-        /*  const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
-         const scale = Math.floor(Math.min(100, scaleFloat));
- 
-         // ถ้าเกิน 100 แปลว่ากว้างพอแล้ว ไม่ต้องขยาย
-         if (scale < 100 && scale > 10) {
-             ws.pageSetup.fitToPage = false;
-             ws.pageSetup.fitToWidth = undefined;
-             ws.pageSetup.fitToHeight = undefined;
-             ws.pageSetup.scale = undefined;
-         } */
+
+
+        if (!opt.autoScaleToFitWidth) {
+            return; // ไม่ทำอะไรเลยถ้าไม่ได้เปิด
+        }
+
+        const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
+        const scale = Math.floor(Math.min(100, scaleFloat));
+
+        if (scale < 100 && scale > 10) {
+            ws.pageSetup.fitToPage = false;
+            ws.pageSetup.fitToWidth = undefined;
+            ws.pageSetup.fitToHeight = undefined;
+            ws.pageSetup.scale = scale;
+        }
     }
 
     wb.eachSheet(ws => {
@@ -873,13 +881,13 @@ async function fillXlsx(tplPath, data) {
         let marginLeft, marginRight, marginTop, marginBottom;
 
         if (margin && typeof margin === 'object') {
-            marginLeft = Number(margin.left ?? 0) || 0;
-            marginRight = Number(margin.right ?? 0) || 0;
-            marginTop = Number(margin.top ?? 0) || 0;
-            marginBottom = Number(margin.bottom ?? 0) || 0;
+            marginLeft = mmToInch(margin.left);
+            marginRight = mmToInch(margin.right);
+            marginTop = mmToInch(margin.top);
+            marginBottom = mmToInch(margin.bottom);
         } else {
-            const m = Number(margin) || 0;
-            marginLeft = marginRight = marginTop = marginBottom = m;
+            const mInch = mmToInch(margin);
+            marginLeft = marginRight = marginTop = marginBottom = mInch;
         }
 
         // 🔹 auto ปรับ margin ตามตำแหน่งเลขหน้า (หน่วย = นิ้ว)
@@ -1181,7 +1189,8 @@ router.get('/schema', async (req, res) => {
                 /* pageNumber: true, */
                 pageNumberPosition: "bottom-center",
                 repeatHeaderRows: "",
-                autoScaleToFitWidth: true
+                autoScaleToFitWidth: true,
+                forceSinglePage: true
             },
             data: {}
         };
@@ -1291,6 +1300,7 @@ router.post('/schema/upload', async (req, res) => {
                 pageNumber: true,
                 pageNumberPosition: 'bottom-center',
                 repeatHeaderRows: '',
+                autoScaleToFitWidth: true,
                 forceSinglePage: true
             },
             ...schema,
