@@ -1291,6 +1291,7 @@ router.post('/schema/upload', async (req, res) => {
                 pageNumber: true,
                 pageNumberPosition: 'bottom-center',
                 repeatHeaderRows: '',
+                forceSinglePage: true
             },
             ...schema,
         };
