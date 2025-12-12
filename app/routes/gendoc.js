@@ -784,11 +784,75 @@ async function fillXlsx(tplPath, data) {
         pageNumber: true,
         pageNumberPosition: 'bottom-center',
         repeatHeaderRows: '',
+        autoScaleToFitWidth: false,
     };
 
     const opt = { ...defaultOpt, ...(data.__options || {}) };
 
     const paperMap = { A3: 8, A4: 9, A5: 11, Letter: 1 };
+
+    function getPaperWidthInches(paperSize, orientation) {
+        // default A4
+        let w = 8.27;
+        let h = 11.69;
+
+        if (paperSize === 'A3') {
+            w = 11.69;
+            h = 16.54;
+        } else if (paperSize === 'Letter') {
+            w = 8.5;
+            h = 11;
+        } else if (paperSize === 'A5') {
+            w = 5.83;
+            h = 8.27;
+        }
+
+        const ori = mapOrientation(orientation || 'portrait');
+        if (ori === 'landscape') {
+            return h; // สลับกว้าง/ยาว
+        }
+        return w;
+    }
+
+    function autoScaleToFitWidth(ws, opt, marginLeft, marginRight) {
+        const paperWidthInches = getPaperWidthInches(opt.paperSize || 'A4', opt.orientation || 'portrait');
+        const printableWidthInches = Math.max(
+            0.1,
+            paperWidthInches - (marginLeft + marginRight)
+        );
+
+        // หา column ที่ใช้จริง
+        const usedCols = new Set();
+        ws.eachRow({ includeEmpty: false }, row => {
+            row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+                usedCols.add(colNumber);
+            });
+        });
+
+        if (usedCols.size === 0) return;
+
+        // รวมความกว้างทุกคอลัมน์ (หน่วยนิ้ว โดยประมาณ)
+        let totalWidthInches = 0;
+        for (const colNumber of usedCols) {
+            const col = ws.getColumn(colNumber);
+            const colWidth = col.width || 8.43; // default Excel ประมาณนี้
+            const colInches = (colWidth * 7) / 96; // 1 หน่วย = ~7px, 96px = 1 inch
+            totalWidthInches += colInches;
+        }
+
+        if (totalWidthInches <= 0) return;
+
+        const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
+        const scale = Math.floor(Math.min(100, scaleFloat));
+
+        // ถ้าเกิน 100 แปลว่ากว้างพอแล้ว ไม่ต้องขยาย
+        if (scale < 100 && scale > 10) {
+            ws.pageSetup.fitToPage = false;
+            ws.pageSetup.fitToWidth = undefined;
+            ws.pageSetup.fitToHeight = undefined;
+            ws.pageSetup.scale = scale;
+        }
+    }
 
     wb.eachSheet(ws => {
         ws.pageSetup.paperSize = paperMap[opt.paperSize] || 9;
@@ -838,6 +902,7 @@ async function fillXlsx(tplPath, data) {
         if (opt.repeatHeaderRows) {
             ws.pageSetup.printTitlesRow = opt.repeatHeaderRows;
         }
+        autoScaleToFitWidth(ws, opt, marginLeft, marginRight);
 
         expandArrayRows(ws, data);
 
@@ -1109,6 +1174,7 @@ router.get('/schema', async (req, res) => {
                 /* pageNumber: true, */
                 pageNumberPosition: "bottom-center",
                 repeatHeaderRows: "",
+                autoScaleToFitWidth: true
             },
             data: {}
         };
