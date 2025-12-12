@@ -45,6 +45,79 @@ const SOFFICE = process.platform === 'win32'
     : 'soffice';
 
 // -------------------------------------------------------
+// Excel format detection / legacy XLS convert
+// -------------------------------------------------------
+function detectExcelFormat(buffer) {
+    if (!buffer || buffer.length < 4) return 'unknown';
+
+    // XLSX (OOXML) เป็น ZIP, ขึ้นต้นด้วย 'PK'
+    if (buffer[0] === 0x50 && buffer[1] === 0x4B) {
+        return 'xlsx';
+    }
+
+    // XLS เก่า (CFB/BIFF) magic: D0 CF 11 E0 ...
+    if (
+        buffer[0] === 0xD0 && buffer[1] === 0xCF &&
+        buffer[2] === 0x11 && buffer[3] === 0xE0
+    ) {
+        return 'xls';
+    }
+
+    return 'unknown';
+}
+
+/**
+ * ให้แน่ใจว่าเราได้เป็น XLSX จริง ๆ
+ * - ถ้า buffer เป็น XLSX อยู่แล้ว → คืนกลับตรง ๆ
+ * - ถ้าเป็น XLS เก่า → แปลงด้วย LibreOffice (soffice) ก่อน
+ */
+async function ensureXlsxFromBuffer(buffer) {
+    const format = detectExcelFormat(buffer);
+
+    if (format === 'xlsx') {
+        return { buffer, convertedFromLegacyXls: false };
+    }
+
+    if (format === 'xls') {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xlsconv_'));
+        const srcPath = path.join(tmpDir, 'input.xls');
+        const outPath = path.join(tmpDir, 'input.xlsx');
+
+        fs.writeFileSync(srcPath, buffer);
+
+        await new Promise((resolve, reject) => {
+            const args = [
+                '--headless',
+                '--nologo',
+                '--nolockcheck',
+                '--nodefault',
+                '--norestore',
+                '--convert-to',
+                'xlsx',
+                '--outdir',
+                tmpDir,
+                srcPath,
+            ];
+            const p = spawn(SOFFICE, args, { stdio: 'ignore' });
+            p.on('exit', code => {
+                if (code !== 0) return reject(new Error('soffice exit ' + code));
+                resolve();
+            });
+        });
+
+        if (!fs.existsSync(outPath)) {
+            throw new Error('XLS→XLSX conversion failed');
+        }
+
+        const xlsxBuffer = fs.readFileSync(outPath);
+        return { buffer: xlsxBuffer, convertedFromLegacyXls: true };
+    }
+
+    // ถ้าไม่ใช่ xls/xlsx → ไม่รองรับ
+    throw new Error('Unsupported Excel format');
+}
+
+// -------------------------------------------------------
 // Utility
 // -------------------------------------------------------
 function get(obj, pathStr) {
@@ -1108,26 +1181,31 @@ router.post('/schema/upload', async (req, res) => {
         if (!permission) {
             throw Error('No Permission');
         }
+
         // ถ้าใช้ express-fileupload ใน app.js มันจะยัดไฟล์ไว้ที่นี่
         if (!req.files || !req.files.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
         const file = req.files.file;          // field name = 'file' ตรงกับ Dragger.name
-        const buffer = file.data;             // เป็น Buffer ของไฟล์ Excel
+        const buffer = file.data;             // เป็น Buffer ของไฟล์ Excel (xls / xlsx ก็ได้)
+
+        // ตรวจฟอร์แมต แล้ว ensure ให้เป็น XLSX ก่อน (รองรับ .xls แบบ auto-convert)
+        const { buffer: xlsxBuffer, convertedFromLegacyXls } = await ensureXlsxFromBuffer(buffer);
 
         // สร้าง temp path (ตาม templateId)
         const templateId = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const tplPath = getTemplatePathFromId(templateId);
 
-        // เซฟไฟล์ลง temp
-        fs.writeFileSync(tplPath, buffer);
+        // เซฟไฟล์ลง temp เป็น .xlsx เสมอ
+        fs.writeFileSync(tplPath, xlsxBuffer);
 
         // ใช้ function เดิมสร้าง schema จากไฟล์นี้
         const schema = await buildSchemaFromTemplate(tplPath);
 
         const finalSchema = {
             __templateId: templateId,
+            __convertedFromLegacyXls: convertedFromLegacyXls, // เผื่อ UI จะเอาไปเตือน user
             __options: {
                 paperSize: 'A4',
                 orientation: 'p',
