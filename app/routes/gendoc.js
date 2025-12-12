@@ -842,16 +842,23 @@ async function fillXlsx(tplPath, data) {
 
         if (totalWidthInches <= 0) return;
 
-        const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
-        const scale = Math.floor(Math.min(100, scaleFloat));
-
-        // ถ้าเกิน 100 แปลว่ากว้างพอแล้ว ไม่ต้องขยาย
-        if (scale < 100 && scale > 10) {
-            ws.pageSetup.fitToPage = false;
-            ws.pageSetup.fitToWidth = undefined;
-            ws.pageSetup.fitToHeight = undefined;
-            ws.pageSetup.scale = scale;
+        if (opt.forceSinglePage) {
+            ws.pageSetup.fitToPage = true;
+            ws.pageSetup.fitToWidth = 1;
+            ws.pageSetup.fitToHeight = 1;
+            ws.pageSetup.scale = undefined; // ปล่อยให้ Excel คิดเอง
+            return;
         }
+        /*  const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
+         const scale = Math.floor(Math.min(100, scaleFloat));
+ 
+         // ถ้าเกิน 100 แปลว่ากว้างพอแล้ว ไม่ต้องขยาย
+         if (scale < 100 && scale > 10) {
+             ws.pageSetup.fitToPage = false;
+             ws.pageSetup.fitToWidth = undefined;
+             ws.pageSetup.fitToHeight = undefined;
+             ws.pageSetup.scale = undefined;
+         } */
     }
 
     wb.eachSheet(ws => {
