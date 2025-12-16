@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const Excel = require('exceljs');
-const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+const { PDFDocument, rgb } = require('pdf-lib');
 const { createCanvas } = require('canvas');
 
 async function checkPermissionUrl(url) {
@@ -29,8 +29,50 @@ async function checkPermissionUrl(url) {
         return false;
     }
 }
+const TEMPLATE_TTL_MS = 6 * 60 * 60 * 1000;
+function cleanupOldTemplates(prefix = 'tpl_', ttlMs = TEMPLATE_TTL_MS) {
+    const dir = os.tmpdir();
+    const now = Date.now();
+    try {
+        const files = fs.readdirSync(dir);
+        for (const f of files) {
+            if (!f.startsWith(prefix) || !f.endsWith('.xlsx')) continue;
+            const full = path.join(dir, f);
+            try {
+                const st = fs.statSync(full);
+                const age = now - st.mtimeMs;
+                if (age > ttlMs) fs.unlinkSync(full);
+            } catch { }
+        }
+    } catch { }
+}
 
+function safeGet(obj, path, fallback = "") {
+    if (obj == null) return fallback;
+    if (!path || typeof path !== "string") return fallback;
 
+    // normalize: items[0].a -> items.0.a
+    // support bracket string keys: a["b-c"] -> a.b-c (แบบปลอดภัย)
+    const normalized = path
+        .trim()
+        .replace(/\[(\d+)\]/g, ".$1")
+        .replace(/\[["']([^"']+)["']\]/g, ".$1")
+        .replace(/\.+/g, ".")           // กัน a..b
+        .replace(/^\./, "")             // กัน .a
+        .replace(/\.$/, "");            // กัน a.
+
+    if (!normalized) return fallback;
+
+    const parts = normalized.split(".").filter(Boolean);
+
+    let cur = obj;
+    for (const p of parts) {
+        if (cur == null) return fallback;
+        cur = cur[p];
+    }
+
+    return cur == null ? fallback : cur;
+}
 
 // template เดิม (ยังอยู่ไปก่อน)
 const TEMPLATE_XLSX = path.join(__dirname, '..', 'templates', 'template.xlsx');
@@ -110,6 +152,7 @@ async function ensureXlsxFromBuffer(buffer) {
         }
 
         const xlsxBuffer = fs.readFileSync(outPath);
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { }
         return { buffer: xlsxBuffer, convertedFromLegacyXls: true };
     }
 
@@ -120,10 +163,7 @@ async function ensureXlsxFromBuffer(buffer) {
 // -------------------------------------------------------
 // Utility
 // -------------------------------------------------------
-function get(obj, pathStr) {
-    const normalized = pathStr.replace(/\[(\d+)\]/g, '.$1');
-    return normalized.split('.').reduce((o, k) => (o ? o[k] ?? '' : ''), obj);
-}
+
 function normalizePos(pos) {
     const map = {
         tl: 'top-left',
@@ -140,22 +180,20 @@ function applyDefaultStyle(cell) {
     const oldFont = cell.font || {};
     const oldAlign = cell.alignment || {};
 
+    // ✅ ตั้งค่าเฉพาะที่ template ไม่ได้ตั้ง
     cell.font = {
         ...oldFont,
-        // ใช้ฟอนต์เดิมถ้ามี ถ้าไม่มีค่อยใช้ TH Sarabun
         name: oldFont.name ?? 'TH SarabunPSK',
-        // ❌ ไม่ยุ่ง size เลย ปล่อยตาม template / fs:
-        color: oldFont.color ?? { argb: 'FF000000' },
-        bold: oldFont.bold ?? false,
-        italic: oldFont.italic ?? false,
-        underline: oldFont.underline ?? false,
+        // อย่าไปแตะ color ถ้าเขาตั้งมาแล้ว
+        // ถ้าอยากกัน "ไม่มีสี" ค่อยใส่เฉพาะตอน undefined
+        ...(oldFont.color === undefined ? { color: { argb: 'FF000000' } } : {}),
     };
 
     cell.alignment = {
         ...oldAlign,
-        horizontal: oldAlign.horizontal ?? 'left',
-        vertical: oldAlign.vertical ?? 'top',
-        wrapText: oldAlign.wrapText ?? false,
+        ...(oldAlign.vertical === undefined ? { vertical: 'top' } : {}),
+        // wrapText อย่าไปตั้ง default มั่ว ๆ เพราะ template อาจคุมเอง
+        // ...(oldAlign.wrapText === undefined ? { wrapText: false } : {}),
     };
 }
 
@@ -352,28 +390,29 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
 
         if (/\[\d+\]/.test(keyPath)) hasArrayToken = true;
 
-        const v = String(get(data, keyPath));
+        const v = String(safeGet(data, keyPath, ""));
         return v;
     });
 
     if (hasArrayToken) {
         const oldAlign = cell.alignment || {};
-
         cell.alignment = {
             ...oldAlign,
-            // เดิมเขียน wrapText: true,
-            // แก้เป็นเซ็ตเฉพาะตอนยังไม่ได้ตั้งค่า
             ...(oldAlign.wrapText === undefined ? { wrapText: true } : {}),
             vertical: oldAlign.vertical || 'top',
         };
 
-        cell.border = {
-            top: { style: 'thin' },
-            left: { style: 'thin' },
-            bottom: { style: 'thin' },
-            right: { style: 'thin' },
-        };
+        // ✅ only set border if template didn't set any
+        if (!cell.border || Object.keys(cell.border).length === 0) {
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' },
+            };
+        }
     }
+
 
 
 
@@ -446,23 +485,57 @@ function resolveTokenValue(token, data) {
     }
 
     // อย่างอื่น treat เป็น key path
-    return get(data, trimmed);
+    return safeGet(data, trimmed, "");
 }
+
 function setByPath(obj, pathStr, value) {
     if (!pathStr) return;
-    const normalized = pathStr.replace(/\[(\d+)\]/g, '.$1');
+    const normalized = String(pathStr).replace(/\[(\d+)\]/g, '.$1');
     const parts = normalized.split('.').filter(Boolean);
     if (!parts.length) return;
 
-    let o = obj;
-    for (let i = 0; i < parts.length - 1; i++) {
-        const k = parts[i];
-        if (o[k] == null || typeof o[k] !== 'object') {
-            o[k] = {};
+    let cur = obj;
+    for (let i = 0; i < parts.length; i++) {
+        const key = parts[i];
+        const isLast = i === parts.length - 1;
+
+        const nextKey = parts[i + 1];
+        const nextIsIndex = nextKey != null && /^\d+$/.test(nextKey);
+
+        if (isLast) {
+            if (Array.isArray(cur) && /^\d+$/.test(key)) cur[Number(key)] = value;
+            else cur[key] = value;
+            return;
         }
-        o = o[k];
+
+        if (Array.isArray(cur) && /^\d+$/.test(key)) {
+            const idx = Number(key);
+            if (cur[idx] == null) cur[idx] = nextIsIndex ? [] : {};
+            cur = cur[idx];
+        } else {
+            if (cur[key] == null) cur[key] = nextIsIndex ? [] : {};
+            cur = cur[key];
+        }
     }
-    o[parts[parts.length - 1]] = value;
+}
+
+function addKey(schema, keyPath) {
+    const kp = String(keyPath || '')
+        .replace(/\[i\]/g, '[0]')
+        .replace(/\[\]/g, '[0]')
+        .trim();
+    if (!kp) return;
+
+    const m = kp.match(/^(\w+)\[(\d+)\]\.(.+)$/);
+    if (m) {
+        const [, arrName, idx, rest] = m;
+        if (!schema[arrName]) schema[arrName] = [];
+        const i = Number(idx) || 0;
+        if (!schema[arrName][i]) schema[arrName][i] = {};
+        setByPath(schema, `${arrName}[${i}].${rest}`, "");
+    } else {
+        if (!(kp in schema)) schema[kp] = "";
+    }
 }
 
 function evalFxFormula(tokens, data) {
@@ -596,11 +669,9 @@ function expandArrayRows(ws, data) {
             if (!m) return;
 
             const inner = m[1];
-            const parts = inner.split('|').map(s => s.trim()).filter(Boolean);
-            if (!parts.length) return;
-
-            const key = parts[0];
-            const mm = key.match(/^(\w+)\[0\]\./);
+            const tokens = splitPlaceholder(inner);
+            const key = tokens[0] || '';
+            const mm = key.match(/^(\w+)\[i\]\./);
             if (mm) arrayName = mm[1];
         });
 
@@ -637,7 +708,7 @@ function expandArrayRows(ws, data) {
 
                 // แก้ [0] → [i] เฉพาะ cell ที่เป็น string
                 if (typeof cell.value === 'string') {
-                    cell.value = cell.value.replace(/\[0\]/g, `[${i}]`);
+                    cell.value = cell.value.replace(/\[i\]/g, `[${i}]`);
                 }
             });
         }
@@ -767,119 +838,167 @@ function smartWrapLabelValueCell(ws, cell, colNumber) {
 
 
 
+function inchToMm(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? (n * 25.4) : 0;
+}
+
+function mmToInch(v) {
+    const n = Number(v) || 0;
+    return n / 25.4;
+}
+
+// reverse map: exceljs paperSize number -> name
+const PAPER_NUM_TO_NAME = {
+    1: 'Letter',
+    8: 'A3',
+    9: 'A4',
+    11: 'A5',
+};
+
+function getTemplateOptionsFromWorksheet(ws) {
+    const psNum = ws?.pageSetup?.paperSize;
+    const ori = String(ws?.pageSetup?.orientation || '').toLowerCase();
+
+    const paperSize = PAPER_NUM_TO_NAME[psNum] || 'A4';
+    const orientation = (ori === 'landscape') ? 'l' : 'p';
+
+    // exceljs margins are in inches (if present)
+    const m = ws?.pageSetup?.margins || {};
+    const margin = {
+        left: inchToMm(m.left ?? 0),
+        right: inchToMm(m.right ?? 0),
+        top: inchToMm(m.top ?? 0),
+        bottom: inchToMm(m.bottom ?? 0),
+    };
+
+    return { paperSize, orientation, margin };
+}
+
+function mergeOptions(sysDefault, tplOpt, userOpt) {
+    // sysDefault <- tplOpt <- userOpt
+    const out = { ...sysDefault, ...tplOpt, ...userOpt };
+
+    // margin ต้อง merge แบบ object
+    if (sysDefault?.margin || tplOpt?.margin || userOpt?.margin) {
+        out.margin = {
+            ...(sysDefault.margin || {}),
+            ...(tplOpt?.margin || {}),
+            ...(userOpt?.margin || {}),
+        };
+    }
+    return out;
+}
+function getPaperWidthInches(paperSize, orientation) {
+    const size = String(paperSize || 'A4').toUpperCase();
+    const ori = String(orientation || 'portrait').toLowerCase();
+
+    // หน่วย: inch (กว้าง)
+    const map = {
+        A3: 11.69,   // 297mm
+        A4: 8.27,    // 210mm
+        A5: 5.83,    // 148mm
+        LETTER: 8.5, // 8.5in
+    };
+
+    let w = map[size] ?? map.A4;
+    if (ori === 'l' || ori === 'landscape') {
+        // สลับกว้าง/สูง → กว้างของ landscape = “ด้านยาว”
+        const longMap = { A3: 16.54, A4: 11.69, A5: 8.27, LETTER: 11 };
+        w = longMap[size] ?? 11.69;
+    }
+    return w;
+}
+
+function autoScaleToFitWidth(ws, opt, marginLeft, marginRight) {
+    const paperWidthInches = getPaperWidthInches(opt.paperSize || 'A4', opt.orientation || 'portrait');
+    const printableWidthInches = Math.max(
+        0.1,
+        paperWidthInches - (marginLeft + marginRight)
+    );
+
+    // หา column ที่ใช้จริง
+    const usedCols = new Set();
+    ws.eachRow({ includeEmpty: false }, row => {
+        row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+            usedCols.add(colNumber);
+        });
+    });
+
+    if (usedCols.size === 0) return;
+
+    // รวมความกว้างทุกคอลัมน์ (หน่วยนิ้ว โดยประมาณ)
+    let totalWidthInches = 0;
+    for (const colNumber of usedCols) {
+        const col = ws.getColumn(colNumber);
+        const colWidth = col.width || 8.43; // default Excel ประมาณนี้
+        const colInches = (colWidth * 7) / 96; // 1 หน่วย = ~7px, 96px = 1 inch
+        totalWidthInches += colInches;
+    }
+
+    if (totalWidthInches <= 0) return;
+
+    if (opt.forceSinglePage) {
+        ws.pageSetup.fitToPage = true;
+        ws.pageSetup.fitToWidth = 1;
+        ws.pageSetup.fitToHeight = 0;
+        ws.pageSetup.scale = undefined;
+        return;
+    }
 
 
+    if (!opt.autoScaleToFitWidth) {
+        return; // ไม่ทำอะไรเลยถ้าไม่ได้เปิด
+    }
+
+    const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
+    const scale = Math.floor(Math.min(100, scaleFloat));
+
+    if (scale < 100 && scale > 10) {
+        ws.pageSetup.fitToPage = false;
+        ws.pageSetup.fitToWidth = undefined;
+        ws.pageSetup.fitToHeight = undefined;
+        ws.pageSetup.scale = scale;
+    }
+}
 // -------------------------------------------------------
 // render excel
 // -------------------------------------------------------
 async function fillXlsx(tplPath, data) {
-
     const wb = new Excel.Workbook();
     await wb.xlsx.readFile(tplPath);
+
     const defaultStyleByKey = {};
-    const defaultOpt = {
+
+    const sysDefaultOpt = {
         paperSize: 'A4',
-        orientation: 'portrait',
-        margin: 0, // รองรับค่า default เป็นตัวเลขอยู่เหมือนเดิม
+        orientation: 'p',
+        margin: { left: 0, right: 0, top: 0, bottom: 0 },
         pageNumber: true,
         pageNumberPosition: 'bottom-center',
         repeatHeaderRows: '',
         autoScaleToFitWidth: false,
     };
 
-    const opt = { ...defaultOpt, ...(data.__options || {}) };
+    const userOpt = (data.__options || {});
 
     const paperMap = { A3: 8, A4: 9, A5: 11, Letter: 1 };
 
-    function getPaperWidthInches(paperSize, orientation) {
-        // default A4
-        let w = 8.27;
-        let h = 11.69;
-
-        if (paperSize === 'A3') {
-            w = 11.69;
-            h = 16.54;
-        } else if (paperSize === 'Letter') {
-            w = 8.5;
-            h = 11;
-        } else if (paperSize === 'A5') {
-            w = 5.83;
-            h = 8.27;
-        }
-
-        const ori = mapOrientation(orientation || 'portrait');
-        if (ori === 'landscape') {
-            return h; // สลับกว้าง/ยาว
-        }
-        return w;
-    }
-    function mmToInch(v) {
-        const n = Number(v) || 0;
-        return n / 25.4;
-    }
-    function autoScaleToFitWidth(ws, opt, marginLeft, marginRight) {
-        const paperWidthInches = getPaperWidthInches(opt.paperSize || 'A4', opt.orientation || 'portrait');
-        const printableWidthInches = Math.max(
-            0.1,
-            paperWidthInches - (marginLeft + marginRight)
-        );
-
-        // หา column ที่ใช้จริง
-        const usedCols = new Set();
-        ws.eachRow({ includeEmpty: false }, row => {
-            row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-                usedCols.add(colNumber);
-            });
-        });
-
-        if (usedCols.size === 0) return;
-
-        // รวมความกว้างทุกคอลัมน์ (หน่วยนิ้ว โดยประมาณ)
-        let totalWidthInches = 0;
-        for (const colNumber of usedCols) {
-            const col = ws.getColumn(colNumber);
-            const colWidth = col.width || 8.43; // default Excel ประมาณนี้
-            const colInches = (colWidth * 7) / 96; // 1 หน่วย = ~7px, 96px = 1 inch
-            totalWidthInches += colInches;
-        }
-
-        if (totalWidthInches <= 0) return;
-
-        if (opt.forceSinglePage) {
-            ws.pageSetup.fitToPage = true;
-            ws.pageSetup.fitToWidth = 1;
-            ws.pageSetup.fitToHeight = 0;
-            ws.pageSetup.scale = undefined;
-            return;
-        }
-
-
-        if (!opt.autoScaleToFitWidth) {
-            return; // ไม่ทำอะไรเลยถ้าไม่ได้เปิด
-        }
-
-        const scaleFloat = (printableWidthInches / totalWidthInches) * 100;
-        const scale = Math.floor(Math.min(100, scaleFloat));
-
-        if (scale < 100 && scale > 10) {
-            ws.pageSetup.fitToPage = false;
-            ws.pageSetup.fitToWidth = undefined;
-            ws.pageSetup.fitToHeight = undefined;
-            ws.pageSetup.scale = scale;
-        }
-    }
-
     wb.eachSheet(ws => {
+        // ✅ 1) อ่านค่าจาก template ก่อน (ต่อ sheet)
+        const tplOpt = getTemplateOptionsFromWorksheet(ws);
+
+        // ✅ 2) รวม option ตามลำดับ: system <- template <- user
+        const opt = mergeOptions(sysDefaultOpt, tplOpt, userOpt);
+
+        // ✅ 3) เซ็ตตาม opt ที่ได้มา (ถ้า user ไม่ส่งมา ก็จะเป็นของ template เอง)
         ws.pageSetup.paperSize = paperMap[opt.paperSize] || 9;
         ws.pageSetup.orientation = mapOrientation(opt.orientation);
 
-        // ----------------------
-        // รองรับ margin ทั้งแบบตัวเดียว และแบบ object 4 ด้าน
-        // ----------------------
+        // -------- margin เดิมของตัว (opt.margin เป็น mm) --------
         const margin = opt.margin ?? 0;
 
         let marginLeft, marginRight, marginTop, marginBottom;
-
         if (margin && typeof margin === 'object') {
             marginLeft = mmToInch(margin.left);
             marginRight = mmToInch(margin.right);
@@ -890,21 +1009,14 @@ async function fillXlsx(tplPath, data) {
             marginLeft = marginRight = marginTop = marginBottom = mInch;
         }
 
-        // 🔹 auto ปรับ margin ตามตำแหน่งเลขหน้า (หน่วย = นิ้ว)
         if (opt.pageNumber) {
             const pos = normalizePos(opt.pageNumberPosition || 'bottom-center');
-            const MIN_TOP = 0.4;     // ~1.8cm
-            const MIN_BOTTOM = 0.4;  // ~1.8cm
-
-            if (pos.startsWith('top') && marginTop < MIN_TOP) {
-                marginTop = MIN_TOP;
-            }
-            if (pos.startsWith('bottom') && marginBottom < MIN_BOTTOM) {
-                marginBottom = MIN_BOTTOM;
-            }
+            const MIN_TOP = 0.4;
+            const MIN_BOTTOM = 0.4;
+            if (pos.startsWith('top') && marginTop < MIN_TOP) marginTop = MIN_TOP;
+            if (pos.startsWith('bottom') && marginBottom < MIN_BOTTOM) marginBottom = MIN_BOTTOM;
         }
 
-        // ✅ ค่อยเซ็ต margin เข้า Excel หลังปรับเสร็จแล้ว
         ws.pageSetup.margins = {
             left: marginLeft,
             right: marginRight,
@@ -917,45 +1029,34 @@ async function fillXlsx(tplPath, data) {
         if (opt.repeatHeaderRows) {
             ws.pageSetup.printTitlesRow = opt.repeatHeaderRows;
         }
+
         autoScaleToFitWidth(ws, opt, marginLeft, marginRight);
 
+        // ---- ที่เหลือใช้ของเดิมได้เลย ----
         expandArrayRows(ws, data);
 
-        // 1) แทนค่า + style จาก token
         ws.eachRow(row => row.eachCell(cell => {
             replaceTokensInCell(cell, data, defaultStyleByKey);
         }));
 
-        // 2) บังคับ wrap แบบ label: value ยาว ๆ เช่น "ชื่อลูกค้า: xxxxxx"
         ws.eachRow(row => row.eachCell((cell, colNumber) => {
             smartWrapLabelValueCell(ws, cell, colNumber);
         }));
 
-        // 3) คำนวณ row height ใหม่ (เฉพาะ Linux)
-        if (IS_LINUX) {
-            autoAdjustRowHeightByWrap(ws);
-        }
+        if (IS_LINUX) autoAdjustRowHeightByWrap(ws);
 
-        // 4) บังคับฟอนต์ TH Sarabun ให้ทุก cell
         ws.eachRow(row => {
             row.eachCell(cell => {
                 const oldFont = cell.font || {};
-                cell.font = {
-                    ...oldFont,
-                    name: 'TH SarabunPSK',
-                };
+                if (!oldFont.name) cell.font = { ...oldFont, name: 'TH SarabunPSK' };
             });
         });
-
-
     });
-
 
     const outXlsx = path.join(os.tmpdir(), `filled_${Date.now()}.xlsx`);
     await wb.xlsx.writeFile(outXlsx);
     return outXlsx;
 }
-
 
 // -------------------------------------------------------
 // convert to pdf
@@ -1064,23 +1165,13 @@ function hexToRgb(hex) {
 // -------------------------------------------------------
 // Schema builder
 // -------------------------------------------------------
+
 async function buildSchemaFromTemplate(tplPath) {
 
     const wb = new Excel.Workbook();
     await wb.xlsx.readFile(tplPath);
 
     const schema = {};
-    function addKey(schema, keyPath) {
-        const m = keyPath.match(/^(\w+)\[(\d+)\]\.(\w+)$/);
-        if (m) {
-            const [, arrName, , fieldName] = m;
-            if (!schema[arrName]) schema[arrName] = [];
-            if (!schema[arrName][0]) schema[arrName][0] = {};
-            schema[arrName][0][fieldName] = '';
-        } else {
-            if (!schema[keyPath]) schema[keyPath] = '';
-        }
-    }
 
     wb.eachSheet(ws => {
         ws.eachRow(row =>
@@ -1106,40 +1197,26 @@ async function buildSchemaFromTemplate(tplPath) {
 
                     // fx: ดึง key ที่เป็น path จาก arg
                     if (key.toLowerCase() === 'fx') {
-                        /*       const cmd = (rest[0] || '').toLowerCase();
-                              const args = rest.slice(1);
-      
-                              if (cmd === 'sum') {
-                                  // fx|sum|qty|price|fee|as:goog[0].total
-                                  for (let tok of args) {
-                                      if (!tok) continue;
-                                      tok = tok.trim();
-                                      if (!tok) continue;
-      
-                                      // 👇 ข้าม alias
-                                      if (tok.toLowerCase().startsWith('as:')) continue;
-      
-                                      // ถ้าไม่ใช่ literal string → ถือว่าเป็น key path
-                                      if (!isQuoted(tok)) {
-                                          addKey(schema, tok);
-                                      }
-                                  }
-                              } else if (cmd === 'if') {
-                                  // fx|if|qty|==|0|"ไม่มี"| "มี"|as:status
-                                  if (args.length >= 1) {
-                                      let left = args[0];
-                                      if (left) {
-                                          left = left.trim();
-                                          if (left && !left.toLowerCase().startsWith('as:') && !isQuoted(left)) {
-                                              addKey(schema, left);
-                                          }
-                                      }
-                                      // ถ้าอนาคตอยากดึง key จาก then/else ก็เพิ่มเหมือนด้านบนได้
-                                  }
-                              } */
+                        for (const t of rest) {
+                            const s = String(t || '').trim();
+                            if (!s) continue;
 
+                            if (s.toLowerCase().startsWith('as:')) {
+                                addKey(schema, s.slice(3).trim());
+                                continue;
+                            }
+
+                            // ถ้าเป็น literal หรือ op ก็ข้าม
+                            if (isQuoted(s)) continue;
+                            if (/^(==|!=|>=|<=|>|<)$/i.test(s)) continue;
+                            if (/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(s)) continue;
+
+                            // เก็บเป็น input path
+                            addKey(schema, s);
+                        }
                         continue;
                     }
+
 
 
 
@@ -1165,7 +1242,7 @@ router.get('/health', (req, res) => {
 
 router.get('/schema', async (req, res) => {
     try {
-        const referer = req.get('Referer');  // หรือ req.headers.referer
+        const referer = req.get('Referer') || '';
         let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
@@ -1192,7 +1269,8 @@ router.get('/schema', async (req, res) => {
                 autoScaleToFitWidth: true,
                 forceSinglePage: true
             },
-            data: {}
+            __templateId: null,
+            __needUploadTemplate: true,
         };
 
 
@@ -1201,14 +1279,19 @@ router.get('/schema', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+function touchFile(p) {
+    const now = new Date();
+    try { fs.utimesSync(p, now, now); } catch { }
+}
 
 router.post('/render', async (req, res) => {
     try {
-        const referer = req.get('Referer');  // หรือ req.headers.referer
+        const referer = req.get('Referer') || '';
         let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
         }
+        cleanupOldTemplates();
         const raw = req.body || {};
         const data = Array.isArray(raw) ? { items: raw } : raw;
 
@@ -1225,7 +1308,7 @@ router.post('/render', async (req, res) => {
         if (!fs.existsSync(tplPath)) {
             return res.status(400).json({ error: 'Template file not found' });
         }
-
+        touchFile(tplPath);
         const xlsx = await fillXlsx(tplPath, data);
         const pdf = await convertToPdf(xlsx);
 
@@ -1239,13 +1322,24 @@ router.post('/render', async (req, res) => {
         }
 
         res.setHeader('Content-Type', 'application/pdf');
-        fs.createReadStream(finalPdf).pipe(res).on('close', () => {
+        let cleaned = false;
+        const cleanup = () => {
+            if (cleaned) return;
+            cleaned = true;
             fs.unlink(xlsx, () => { });
             fs.unlink(pdf, () => { });
-            if (finalPdf !== pdf) {
-                fs.unlink(finalPdf, () => { });
-            }
+            if (finalPdf !== pdf) fs.unlink(finalPdf, () => { });
+        };
+
+        res.on('finish', cleanup); // ส่งครบ
+        res.on('close', cleanup);  // client ตัดกลางทาง
+        const stream = fs.createReadStream(finalPdf);
+        stream.on('error', (err) => {
+            cleanup();
+            if (!res.headersSent) res.status(500).json({ error: err.message });
+            else res.destroy();
         });
+        stream.pipe(res);
 
     } catch (e) {
         console.error(e);
@@ -1254,11 +1348,13 @@ router.post('/render', async (req, res) => {
 });
 
 
+
 // POST /api/gendoc/schema/upload
 // รับไฟล์ Excel แล้วคืน schema + templateId
 router.post('/schema/upload', async (req, res) => {
     try {
-        const referer = req.get('Referer');  // หรือ req.headers.referer
+        cleanupOldTemplates();
+        const referer = req.get('Referer') || '';
         let permission = await checkPermissionUrl(referer);
         if (!permission) {
             throw Error('No Permission');
@@ -1285,28 +1381,32 @@ router.post('/schema/upload', async (req, res) => {
         // ใช้ function เดิมสร้าง schema จากไฟล์นี้
         const schema = await buildSchemaFromTemplate(tplPath);
 
+        const wb = new Excel.Workbook();
+        await wb.xlsx.readFile(tplPath);
+        const firstWs = wb.worksheets?.[0];
+        const tplOpt = firstWs ? getTemplateOptionsFromWorksheet(firstWs) : {};
+
         const finalSchema = {
             __templateId: templateId,
-            __convertedFromLegacyXls: convertedFromLegacyXls, // เผื่อ UI จะเอาไปเตือน user
-            __options: {
-                paperSize: 'A4',
-                orientation: 'p',
-                margin: {
-                    left: 0,
-                    right: 0,
-                    top: 0,
-                    bottom: 0,
+            __convertedFromLegacyXls: convertedFromLegacyXls,
+            __options: mergeOptions(
+                {
+                    paperSize: 'A4',
+                    orientation: 'p',
+                    margin: { left: 0, right: 0, top: 0, bottom: 0 },
+                    pageNumber: true,
+                    pageNumberPosition: 'bottom-center',
+                    repeatHeaderRows: '',
+                    autoScaleToFitWidth: true,
+                    forceSinglePage: true,
                 },
-                pageNumber: true,
-                pageNumberPosition: 'bottom-center',
-                repeatHeaderRows: '',
-                autoScaleToFitWidth: true,
-                forceSinglePage: true
-            },
+                tplOpt,
+                {}
+            ),
             ...schema,
         };
 
-        res.json(finalSchema);
+        return res.json(finalSchema);
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: e.message });
