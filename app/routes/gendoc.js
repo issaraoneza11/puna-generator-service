@@ -354,7 +354,10 @@ function softWrapLabelValueCell(cell, colNumber) {
         vertical: align.vertical || 'top',
     };
 }
-
+function isExplicitIndexPath(keyPath) {
+    // [0] [1] [99] ถือว่า explicit index
+    return /\[\d+\]/.test(String(keyPath || ''));
+}
 function normalizeKeyForStyle(path) {
     // แปลง goog[0].no, goog[1].no → goog[].no ให้เป็น key เดียวกัน
     return String(path || '').replace(/\[\d+\]/g, '[]');
@@ -366,7 +369,8 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     let hasExplicitStyle = false;            // ✅ เพิ่ม
     let mainKeyPath = null;
     let lastExplicitStyleTokens = null;
-
+    const useStyleCache = !!cell._fromArrayTemplate;
+    // ✅ มีสิทธิ์ใช้ cache เฉพาะ cell ที่มาจาก expand array เท่านั้น
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
         const tokens = splitPlaceholder(inner);
         if (!tokens.length) return '';
@@ -428,17 +432,19 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         };
     }
 
-    if (mainKeyPath && !hasExplicitStyle) {
+    if (mainKeyPath && !hasExplicitStyle && useStyleCache) {
         const norm = normalizeKeyForStyle(mainKeyPath);
         const defTokens = defaultStyleByKey[norm];
-        if (defTokens && defTokens.length > 0) {
-            applyInlineStyle(cell, defTokens);
-        }
+        if (defTokens?.length) applyInlineStyle(cell, defTokens);
     }
     // ✅ apply style ทีเดียวหลังจบ (ตัวท้ายสุดชนะ)
     if (hasExplicitStyle && lastExplicitStyleTokens?.length) {
         applyInlineStyle(cell, lastExplicitStyleTokens);
-        if (mainKeyPath) defaultStyleByKey[normalizeKeyForStyle(mainKeyPath)] = lastExplicitStyleTokens;
+
+        // ✅ จำ style เฉพาะ array template เท่านั้น
+        if (mainKeyPath && useStyleCache) {
+            defaultStyleByKey[normalizeKeyForStyle(mainKeyPath)] = lastExplicitStyleTokens;
+        }
     }
 
 }
@@ -679,6 +685,10 @@ function expandArrayRows(ws, data) {
 
         const templateRow = ws.getRow(rowNum);
 
+        // ✅ mark template row/cells ว่าเป็น array-template
+        templateRow._fromArrayTemplate = true;
+        templateRow.eachCell({ includeEmpty: true }, (c) => { c._fromArrayTemplate = true; });
+
         // ✅ normalize แถวแรก: [i] -> [0]
         templateRow.eachCell({ includeEmpty: true }, (c) => {
             if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
@@ -697,9 +707,15 @@ function expandArrayRows(ws, data) {
             newRow.values = templateValues.slice();
             if (templateHeight != null) newRow.height = templateHeight;
 
+            // ✅ mark new row ว่าเป็น array-generated
+            newRow._fromArrayTemplate = true;
+
             templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
                 const cell = newRow.getCell(col);
                 cell.style = JSON.parse(JSON.stringify(templateStyles[col] || {}));
+
+                // ✅ mark cell ว่าเป็น array-generated
+                cell._fromArrayTemplate = true;
 
                 // ✅ เปลี่ยนเฉพาะ arrayName[0] -> arrayName[i]
                 if (typeof cell.value === 'string') {
@@ -710,6 +726,7 @@ function expandArrayRows(ws, data) {
         }
     }
 }
+
 
 const measureCanvas = createCanvas(1000, 100);
 const measureCtx = measureCanvas.getContext('2d');
