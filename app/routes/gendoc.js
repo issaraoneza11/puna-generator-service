@@ -314,7 +314,7 @@ function softWrapLabelValueCell(cell, colNumber) {
 
     if (!rest) return;
 
-    // ความกว้างคอลัมน์ (หน่วยของ exceljs) → แปลงคร่าว ๆ เป็น pixel
+
     const ws = cell.worksheet;
     const col = ws.getColumn(colNumber);
     const colWidth = col.width || 10;
@@ -331,10 +331,10 @@ function softWrapLabelValueCell(cell, colNumber) {
         const candidate = current + ch;
         const w = measureTextWidthPx(candidate, fontSize, fontName);
 
-        // ถ้าเกินความกว้าง cell แล้ว และ current มีตัวมากกว่าพวก prefix → ตัดบรรทัด
+
         if (w > colPx && current !== prefix) {
             lines.push(current);
-            // บรรทัดใหม่: indent ด้วยช่องว่างเท่ากับ prefix
+
             const indent = ' '.repeat(prefix.length);
             current = indent + ch;
         } else {
@@ -354,10 +354,7 @@ function softWrapLabelValueCell(cell, colNumber) {
         vertical: align.vertical || 'top',
     };
 }
-function isExplicitIndexPath(keyPath) {
-    // [0] [1] [99] ถือว่า explicit index
-    return /\[\d+\]/.test(String(keyPath || ''));
-}
+
 function normalizeKeyForStyle(path) {
     // แปลง goog[0].no, goog[1].no → goog[].no ให้เป็น key เดียวกัน
     return String(path || '').replace(/\[\d+\]/g, '[]');
