@@ -47,32 +47,46 @@ function cleanupOldTemplates(prefix = 'tpl_', ttlMs = TEMPLATE_TTL_MS) {
     } catch { }
 }
 
-function safeGet(obj, path, fallback = "") {
-    if (obj == null) return fallback;
-    if (!path || typeof path !== "string") return fallback;
+function resolvePathWithState(obj, pathStr) {
+    if (obj == null) return { value: "", state: "NOT_FOUND" };
+    if (!pathStr || typeof pathStr !== "string") return { value: "", state: "NOT_FOUND" };
 
-    // normalize: items[0].a -> items.0.a
-    // support bracket string keys: a["b-c"] -> a.b-c (แบบปลอดภัย)
-    const normalized = path
+    const normalized = pathStr
         .trim()
         .replace(/\[(\d+)\]/g, ".$1")
         .replace(/\[["']([^"']+)["']\]/g, ".$1")
-        .replace(/\.+/g, ".")           // กัน a..b
-        .replace(/^\./, "")             // กัน .a
-        .replace(/\.$/, "");            // กัน a.
+        .replace(/\.+/g, ".")
+        .replace(/^\./, "")
+        .replace(/\.$/, "");
 
-    if (!normalized) return fallback;
+    if (!normalized) return { value: "", state: "NOT_FOUND" };
 
     const parts = normalized.split(".").filter(Boolean);
 
     let cur = obj;
     for (const p of parts) {
-        if (cur == null) return fallback;
+        if (cur == null) return { value: "", state: "NOT_FOUND" };
+
+        // ✅ จุดสำคัญ: ต้องเช็ค "มี key จริงไหม"
+        if (typeof cur === "object" && cur !== null && !(p in cur)) {
+            return { value: "", state: "NOT_FOUND" };
+        }
         cur = cur[p];
     }
 
-    return cur == null ? fallback : cur;
+    if (cur === undefined) return { value: "", state: "NOT_FOUND" };
+    if (cur === null) return { value: "", state: "FOUND_BUT_EMPTY" };
+    if (typeof cur === "string" && cur.trim() === "") return { value: "", state: "FOUND_BUT_EMPTY" };
+
+    return { value: cur, state: "FOUND" };
 }
+
+
+function safeGet(obj, pathStr, fallback = "") {
+    const r = resolvePathWithState(obj, pathStr);
+    return (r.state === "FOUND") ? r.value : fallback;
+}
+
 
 // template เดิม (ยังอยู่ไปก่อน)
 const TEMPLATE_XLSX = path.join(__dirname, '..', 'templates', 'template.xlsx');
@@ -349,29 +363,20 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     if (typeof cell.value !== 'string') return;
 
     let hasArrayToken = false;
-
-    // state ต่อ 1 cell
+    let hasExplicitStyle = false;            // ✅ เพิ่ม
     let mainKeyPath = null;
-    let hasExplicitStyle = false;
+    let lastExplicitStyleTokens = null;
 
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
-        const tokens = splitPlaceholder(inner);   // 👈 ใช้ฟังก์ชันใหม่
-        if (tokens.length === 0) return '';
+        const tokens = splitPlaceholder(inner);
+        if (!tokens.length) return '';
 
         const key = tokens[0];
         const styleTokens = tokens.slice(1);
 
-        // 1) style
         if (key.toLowerCase() === 'style') {
             hasExplicitStyle = true;
-            if (styleTokens.length > 0) {
-                applyInlineStyle(cell, styleTokens);
-
-                if (mainKeyPath) {
-                    const norm = normalizeKeyForStyle(mainKeyPath);
-                    defaultStyleByKey[norm] = styleTokens.slice();
-                }
-            }
+            lastExplicitStyleTokens = styleTokens.slice(); // ✅ เอาตัวท้ายสุด
             return '';
         }
 
@@ -390,7 +395,8 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
 
         if (/\[\d+\]/.test(keyPath)) hasArrayToken = true;
 
-        const v = String(safeGet(data, keyPath, ""));
+        const r = resolvePathWithState(data, keyPath);
+        const v = String(r.value ?? "");
         return v;
     });
 
@@ -403,14 +409,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
         };
 
         // ✅ only set border if template didn't set any
-        if (!cell.border || Object.keys(cell.border).length === 0) {
-            cell.border = {
-                top: { style: 'thin' },
-                left: { style: 'thin' },
-                bottom: { style: 'thin' },
-                right: { style: 'thin' },
-            };
-        }
+
     }
 
 
@@ -436,7 +435,11 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
             applyInlineStyle(cell, defTokens);
         }
     }
-
+    // ✅ apply style ทีเดียวหลังจบ (ตัวท้ายสุดชนะ)
+    if (hasExplicitStyle && lastExplicitStyleTokens?.length) {
+        applyInlineStyle(cell, lastExplicitStyleTokens);
+        if (mainKeyPath) defaultStyleByKey[normalizeKeyForStyle(mainKeyPath)] = lastExplicitStyleTokens;
+    }
 
 }
 
@@ -453,25 +456,22 @@ function stripQuotes(str) {
 function splitPlaceholder(inner) {
     if (!inner) return [];
 
-    // แปลง \r\n, \n ให้เป็น space ธรรมดา
-    let s = String(inner)
-        .replace(/\r\n/g, '\n')
-        .replace(/\n+/g, ' ');
+    let s = String(inner).replace(/\r\n/g, '\n').replace(/\n/g, ' ');
 
-    // split ตาม | แล้ว trim ช่องว่างออก
+    // split ตาม | ก่อน
     let parts = s.split('|').map(p => p.trim()).filter(Boolean);
     if (parts.length === 0) return [];
 
-    // กรณีเคาะบรรทัดผิด เช่น "style\n  ni | hl..."
-    // จะได้ "style ni" → ถ้า token แรกมี space และไม่ใช่ string แบบใส่ quote
-    // ให้แตกเพิ่มตาม space เป็นหลาย token
-    if (!isQuoted(parts[0]) && /\s/.test(parts[0])) {
-        const firstPieces = parts[0].split(/\s+/).filter(Boolean);
+    // ✅ แตก space เพิ่มเฉพาะ style เท่านั้น
+    const head = parts[0];
+    if (!isQuoted(head) && head.toLowerCase().startsWith('style') && /\s/.test(head)) {
+        const firstPieces = head.split(/\s+/).filter(Boolean);
         parts = [...firstPieces, ...parts.slice(1)];
     }
 
     return parts;
 }
+
 
 function resolveTokenValue(token, data) {
     if (token == null) return '';
@@ -490,7 +490,15 @@ function resolveTokenValue(token, data) {
 
 function setByPath(obj, pathStr, value) {
     if (!pathStr) return;
-    const normalized = String(pathStr).replace(/\[(\d+)\]/g, '.$1');
+
+    const normalized = String(pathStr)
+        .trim()
+        .replace(/\[(\d+)\]/g, '.$1')
+        .replace(/\[["']([^"']+)["']\]/g, '.$1')  // ✅ เพิ่มบรรทัดนี้
+        .replace(/\.+/g, ".")
+        .replace(/^\./, "")
+        .replace(/\.$/, "");
+
     const parts = normalized.split('.').filter(Boolean);
     if (!parts.length) return;
 
@@ -520,23 +528,15 @@ function setByPath(obj, pathStr, value) {
 }
 
 function addKey(schema, keyPath) {
-    const kp = String(keyPath || '')
-        .replace(/\[i\]/g, '[0]')
-        .replace(/\[\]/g, '[0]')
+    const kp = String(keyPath || "")
+        .replace(/\[i\]/g, "[0]")
+        .replace(/\[\]/g, "[0]")
         .trim();
     if (!kp) return;
 
-    const m = kp.match(/^(\w+)\[(\d+)\]\.(.+)$/);
-    if (m) {
-        const [, arrName, idx, rest] = m;
-        if (!schema[arrName]) schema[arrName] = [];
-        const i = Number(idx) || 0;
-        if (!schema[arrName][i]) schema[arrName][i] = {};
-        setByPath(schema, `${arrName}[${i}].${rest}`, "");
-    } else {
-        if (!(kp in schema)) schema[kp] = "";
-    }
+    setByPath(schema, kp, "");
 }
+
 
 function evalFxFormula(tokens, data) {
     if (!tokens || tokens.length === 0) return '';
@@ -662,14 +662,11 @@ function expandArrayRows(ws, data) {
         const row = ws.getRow(rowNum);
         let arrayName = null;
 
-        // หา array key จาก row นี้ เช่น goog[0].no
         row.eachCell(cell => {
             if (typeof cell.value !== 'string') return;
             const m = cell.value.match(/{{\s*([^{}]+?)\s*}}/);
             if (!m) return;
-
-            const inner = m[1];
-            const tokens = splitPlaceholder(inner);
+            const tokens = splitPlaceholder(m[1]);
             const key = tokens[0] || '';
             const mm = key.match(/^(\w+)\[i\]\./);
             if (mm) arrayName = mm[1];
@@ -680,35 +677,34 @@ function expandArrayRows(ws, data) {
         const arr = data[arrayName];
         if (!Array.isArray(arr) || arr.length <= 1) continue;
 
-        // เก็บค่า template row ไว้ให้ชัด ๆ
         const templateRow = ws.getRow(rowNum);
+
+        // ✅ normalize แถวแรก: [i] -> [0]
+        templateRow.eachCell({ includeEmpty: true }, (c) => {
+            if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
+        });
+
         const templateValues = templateRow.values.slice();
         const templateHeight = templateRow.height;
 
-        // เก็บ style ของแต่ละคอลัมน์แบบ deep copy
         const templateStyles = {};
         templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
             templateStyles[col] = JSON.parse(JSON.stringify(tmplCell.style || {}));
         });
 
-        // สร้าง row เพิ่มตามจำนวน array
         for (let i = 1; i < arr.length; i++) {
             const newRow = ws.insertRow(rowNum + i, []);
             newRow.values = templateValues.slice();
-
-            if (templateHeight != null) {
-                newRow.height = templateHeight;
-            }
+            if (templateHeight != null) newRow.height = templateHeight;
 
             templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
                 const cell = newRow.getCell(col);
-
-                // clone style จาก template เป๊ะ ๆ
                 cell.style = JSON.parse(JSON.stringify(templateStyles[col] || {}));
 
-                // แก้ [0] → [i] เฉพาะ cell ที่เป็น string
+                // ✅ เปลี่ยนเฉพาะ arrayName[0] -> arrayName[i]
                 if (typeof cell.value === 'string') {
-                    cell.value = cell.value.replace(/\[i\]/g, `[${i}]`);
+                    const re = new RegExp(`\\b${arrayName}\\[0\\]`, 'g');
+                    cell.value = cell.value.replace(re, `${arrayName}[${i}]`);
                 }
             });
         }
@@ -1080,7 +1076,9 @@ function convertToPdf(xlsxPath) {
         p.on('exit', code => {
             if (code !== 0) return reject(new Error('soffice exit ' + code));
             const base = path.basename(xlsxPath).replace(/\.[^.]+$/, '');
-            resolve(path.join(outDir, `${base}.pdf`));
+            const pdfPath = path.join(outDir, `${base}.pdf`);
+            if (!fs.existsSync(pdfPath)) throw new Error('PDF not found after convert');
+            resolve(pdfPath);
         });
     });
 }
