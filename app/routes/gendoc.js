@@ -660,33 +660,62 @@ function mapOrientation(input) {
 // -------------------------------------------------------
 // ขยาย rows แบบ array
 // -------------------------------------------------------
+function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findArrayNameInRow(row) {
+    // หา arrayName จาก placeholder ทั้ง row (รวมเคส fx ด้วย เพราะมันเป็น string เหมือนกัน)
+    let found = null;
+
+    row.eachCell({ includeEmpty: true }, (cell) => {
+        if (found) return;
+        if (typeof cell.value !== 'string') return;
+
+        const re = /{{\s*([^{}]+?)\s*}}/g;
+        let m;
+        while ((m = re.exec(cell.value))) {
+            const inner = m[1];
+            const tokens = splitPlaceholder(inner);
+
+            // เช็คทุก token (ไม่ใช่แค่ key ตัวแรก)
+            for (const tk of tokens) {
+                const s = String(tk || '');
+                const mm = s.match(/([A-Za-z0-9_]+)\[i\]/); // ✅ ไม่บังคับต้องมี .
+                if (mm) {
+                    found = mm[1];
+                    return;
+                }
+            }
+        }
+    });
+
+    return found;
+}
+
 function expandArrayRows(ws, data) {
     for (let rowNum = ws.rowCount; rowNum >= 1; rowNum--) {
         const row = ws.getRow(rowNum);
-        let arrayName = null;
 
-        row.eachCell(cell => {
-            if (typeof cell.value !== 'string') return;
-            const m = cell.value.match(/{{\s*([^{}]+?)\s*}}/);
-            if (!m) return;
-            const tokens = splitPlaceholder(m[1]);
-            const key = tokens[0] || '';
-            const mm = key.match(/^(\w+)\[i\]\./);
-            if (mm) arrayName = mm[1];
-        });
-
+        const arrayName = findArrayNameInRow(row);
         if (!arrayName) continue;
 
         const arr = data[arrayName];
-        if (!Array.isArray(arr) || arr.length <= 1) continue;
+        if (!Array.isArray(arr) || arr.length <= 1) {
+            // ถึงจะไม่ expand ก็ยังควร normalize [i] -> [0] กันหลุด
+            row.eachCell({ includeEmpty: true }, (c) => {
+                if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
+            });
+            continue;
+        }
 
         const templateRow = ws.getRow(rowNum);
 
-        // ✅ mark template row/cells ว่าเป็น array-template
+        // mark
         templateRow._fromArrayTemplate = true;
         templateRow.eachCell({ includeEmpty: true }, (c) => { c._fromArrayTemplate = true; });
 
-        // ✅ normalize แถวแรก: [i] -> [0]
+        // ✅ normalize: [i] -> [0] แบบ global ทั้งแถว (ครอบคลุม fx ด้วย)
         templateRow.eachCell({ includeEmpty: true }, (c) => {
             if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
         });
@@ -699,31 +728,27 @@ function expandArrayRows(ws, data) {
             templateStyles[col] = JSON.parse(JSON.stringify(tmplCell.style || {}));
         });
 
+        const re0 = new RegExp(`${escapeRegExp(arrayName)}\\[0\\]`, 'g');
+
         for (let i = 1; i < arr.length; i++) {
             const newRow = ws.insertRow(rowNum + i, []);
             newRow.values = templateValues.slice();
             if (templateHeight != null) newRow.height = templateHeight;
-
-            // ✅ mark new row ว่าเป็น array-generated
             newRow._fromArrayTemplate = true;
 
             templateRow.eachCell({ includeEmpty: true }, (tmplCell, col) => {
                 const cell = newRow.getCell(col);
                 cell.style = JSON.parse(JSON.stringify(templateStyles[col] || {}));
-
-                // ✅ mark cell ว่าเป็น array-generated
                 cell._fromArrayTemplate = true;
 
-                // ✅ เปลี่ยนเฉพาะ arrayName[0] -> arrayName[i]
+                // ✅ เปลี่ยน arrayName[0] -> arrayName[i] (global)
                 if (typeof cell.value === 'string') {
-                    const re = new RegExp(`\\b${arrayName}\\[0\\]`, 'g');
-                    cell.value = cell.value.replace(re, `${arrayName}[${i}]`);
+                    cell.value = cell.value.replace(re0, `${arrayName}[${i}]`);
                 }
             });
         }
     }
 }
-
 
 const measureCanvas = createCanvas(1000, 100);
 const measureCtx = measureCanvas.getContext('2d');
