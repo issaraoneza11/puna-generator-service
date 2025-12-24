@@ -681,9 +681,9 @@ function findArrayNameInRow(row) {
             // เช็คทุก token (ไม่ใช่แค่ key ตัวแรก)
             for (const tk of tokens) {
                 const s = String(tk || '');
-                const mm = s.match(/([A-Za-z0-9_]+)\[i\]/); // ✅ ไม่บังคับต้องมี .
+                const mm = s.match(/(.+?)\[i\]/); // ✅ ไม่บังคับต้องมี .
                 if (mm) {
-                    found = mm[1];
+                    found = (mm[1] || '').trim();
                     return;
                 }
             }
@@ -749,6 +749,15 @@ function expandArrayRows(ws, data) {
         }
     }
 }
+
+function assertNoILeft(ws) {
+    ws.eachRow(r => r.eachCell({ includeEmpty: true }, c => {
+        if (typeof c.value === 'string' && /\[i\]/.test(c.value)) {
+            throw new Error(`Found [i] left at ${ws.name}!${c.address}: ${c.value}`);
+        }
+    }));
+}
+
 
 const measureCanvas = createCanvas(1000, 100);
 const measureCtx = measureCanvas.getContext('2d');
@@ -1069,6 +1078,7 @@ async function fillXlsx(tplPath, data) {
 
         // ---- ที่เหลือใช้ของเดิมได้เลย ----
         expandArrayRows(ws, data);
+        assertNoILeft(ws);
 
         ws.eachRow(row => row.eachCell(cell => {
             replaceTokensInCell(cell, data, defaultStyleByKey);
