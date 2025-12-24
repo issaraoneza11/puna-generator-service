@@ -664,12 +664,10 @@ function escapeRegExp(s) {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function findArrayNameInRow(row) {
-    // หา arrayName จาก placeholder ทั้ง row (รวมเคส fx ด้วย เพราะมันเป็น string เหมือนกัน)
-    let found = null;
+function findArrayNamesInRow(row) {
+    const found = new Set();
 
     row.eachCell({ includeEmpty: true }, (cell) => {
-        if (found) return;
         if (typeof cell.value !== 'string') return;
 
         const re = /{{\s*([^{}]+?)\s*}}/g;
@@ -678,47 +676,51 @@ function findArrayNameInRow(row) {
             const inner = m[1];
             const tokens = splitPlaceholder(inner);
 
-            // เช็คทุก token (ไม่ใช่แค่ key ตัวแรก)
+            // เช็คทุก token (รวม fx args ด้วย เพราะมันถูก split มาแล้วเหมือนกัน)
             for (const tk of tokens) {
-                const s = String(tk || '');
-                const mm = s.match(/(.+?)\[i\]/); // ✅ ไม่บังคับต้องมี .
+                const s = String(tk || '').trim();
+                if (!s) continue;
+
+                const mm = s.match(/(.+?)\[i\]/); // จับก่อน [i] ทั้งหมด (รวม dot path)
                 if (mm) {
-                    found = (mm[1] || '').trim();
-                    return;
+                    const name = (mm[1] || '').trim();
+                    if (name) found.add(name);
                 }
             }
         }
     });
 
-    return found;
+    return Array.from(found);
 }
 
 function expandArrayRows(ws, data) {
     for (let rowNum = ws.rowCount; rowNum >= 1; rowNum--) {
         const row = ws.getRow(rowNum);
 
-        const arrayName = findArrayNameInRow(row);
-        if (!arrayName) continue;
+        const arrayNames = findArrayNamesInRow(row);
+        if (!arrayNames.length) continue;
 
-        const arr = data[arrayName];
-        if (!Array.isArray(arr) || arr.length <= 1) {
-            // ถึงจะไม่ expand ก็ยังควร normalize [i] -> [0] กันหลุด
-            row.eachCell({ includeEmpty: true }, (c) => {
-                if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
-            });
-            continue;
-        }
+        // ✅ หา maxLen ตามกฎ: ไม่มี/ไม่ใช่ array = 0, สุดท้าย max ต้อง >= 1
+        const lens = arrayNames.map((p) => {
+            const r = resolvePathWithState(data, p);
+            return Array.isArray(r.value) ? r.value.length : 0;
+        });
+        const maxLen = Math.max(1, ...lens);
 
+        // templateRow
         const templateRow = ws.getRow(rowNum);
 
-        // mark
+        // mark (เหมือนเดิม)
         templateRow._fromArrayTemplate = true;
         templateRow.eachCell({ includeEmpty: true }, (c) => { c._fromArrayTemplate = true; });
 
-        // ✅ normalize: [i] -> [0] แบบ global ทั้งแถว (ครอบคลุม fx ด้วย)
+        // ✅ normalize: [i] -> [0] ทั้งแถว (ครอบคลุมทุก array)
         templateRow.eachCell({ includeEmpty: true }, (c) => {
             if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
         });
+
+        // ถ้า maxLen = 1 ไม่ต้อง insert row เพิ่ม แค่ normalize ก็พอ
+        if (maxLen <= 1) continue;
 
         const templateValues = templateRow.values.slice();
         const templateHeight = templateRow.height;
@@ -728,9 +730,14 @@ function expandArrayRows(ws, data) {
             templateStyles[col] = JSON.parse(JSON.stringify(tmplCell.style || {}));
         });
 
-        const re0 = new RegExp(`${escapeRegExp(arrayName)}\\[0\\]`, 'g');
+        // เตรียม regex ของทุก arrayName: arr[0] -> arr[i]
+        const reByArr0 = arrayNames.map((arrName) => ({
+            arrName,
+            re0: new RegExp(`${escapeRegExp(arrName)}\\[0\\]`, 'g'),
+        }));
 
-        for (let i = 1; i < arr.length; i++) {
+        // insert rows 1..maxLen-1
+        for (let i = 1; i < maxLen; i++) {
             const newRow = ws.insertRow(rowNum + i, []);
             newRow.values = templateValues.slice();
             if (templateHeight != null) newRow.height = templateHeight;
@@ -741,14 +748,17 @@ function expandArrayRows(ws, data) {
                 cell.style = JSON.parse(JSON.stringify(templateStyles[col] || {}));
                 cell._fromArrayTemplate = true;
 
-                // ✅ เปลี่ยน arrayName[0] -> arrayName[i] (global)
                 if (typeof cell.value === 'string') {
-                    cell.value = cell.value.replace(re0, `${arrayName}[${i}]`);
+                    // ✅ replace ทุก array ในลิสต์
+                    for (const it of reByArr0) {
+                        cell.value = cell.value.replace(it.re0, `${it.arrName}[${i}]`);
+                    }
                 }
             });
         }
     }
 }
+
 
 function assertNoILeft(ws) {
     ws.eachRow(r => r.eachCell({ includeEmpty: true }, c => {
