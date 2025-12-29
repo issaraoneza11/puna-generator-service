@@ -360,7 +360,8 @@ function normalizeKeyForStyle(path) {
     return String(path || '').replace(/\[\d+\]/g, '[]');
 }
 function replaceTokensInCell(cell, data, defaultStyleByKey) {
-    if (typeof cell.value !== 'string') return;
+    const text = cellValueToString(cell.value);
+    if (text == null) return
 
     let hasArrayToken = false;
     let hasExplicitStyle = false;            // ✅ เพิ่ม
@@ -368,6 +369,7 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     let lastExplicitStyleTokens = null;
     const useStyleCache = !!cell._fromArrayTemplate;
     // ✅ มีสิทธิ์ใช้ cache เฉพาะ cell ที่มาจาก expand array เท่านั้น
+    cell.value = text;
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
         const tokens = splitPlaceholder(inner);
         if (!tokens.length) return '';
@@ -668,7 +670,9 @@ function findArrayNamesInRow(row) {
     const found = new Set();
 
     row.eachCell({ includeEmpty: true }, (cell) => {
-        if (typeof cell.value !== 'string') return;
+        const text = cellValueToString(cell.value);
+        if (text == null) return;
+        cell.value = text;
 
         const re = /{{\s*([^{}]+?)\s*}}/g;
         let m;
@@ -716,9 +720,9 @@ function expandArrayRows(ws, data) {
 
         // ✅ normalize: [i] -> [0] ทั้งแถว (ครอบคลุมทุก array)
         templateRow.eachCell({ includeEmpty: true }, (c) => {
-            if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
+            const t = cellValueToString(c.value);
+            if (t != null) c.value = t.replace(/\[i\]/g, '[0]');
         });
-
         // ถ้า maxLen = 1 ไม่ต้อง insert row เพิ่ม แค่ normalize ก็พอ
         if (maxLen <= 1) continue;
 
@@ -762,7 +766,8 @@ function expandArrayRows(ws, data) {
 
 function assertNoILeft(ws) {
     ws.eachRow(r => r.eachCell({ includeEmpty: true }, c => {
-        if (typeof c.value === 'string' && /\[i\]/.test(c.value)) {
+        const t = cellValueToString(c.value);
+        if (t && /\[i\]/.test(t)) {
             throw new Error(`Found [i] left at ${ws.name}!${c.address}: ${c.value}`);
         }
     }));
@@ -1136,7 +1141,7 @@ function convertToPdf(xlsxPath) {
             if (code !== 0) return reject(new Error('soffice exit ' + code));
             const base = path.basename(xlsxPath).replace(/\.[^.]+$/, '');
             const pdfPath = path.join(outDir, `${base}.pdf`);
-            if (!fs.existsSync(pdfPath)) throw new Error('PDF not found after convert');
+            if (!fs.existsSync(pdfPath)) return reject(new Error('PDF not found after convert'));
             resolve(pdfPath);
         });
     });
@@ -1233,11 +1238,12 @@ async function buildSchemaFromTemplate(tplPath) {
     wb.eachSheet(ws => {
         ws.eachRow(row =>
             row.eachCell(cell => {
-                if (typeof cell.value !== 'string') return;
+                const text = cellValueToString(cell.value);
+                if (text == null) return;
 
                 const re = /{{\s*([^{}]+?)\s*}}/g;
                 let m;
-                while ((m = re.exec(cell.value))) {
+                while ((m = re.exec(text))) {
                     const inner = m[1];
                     const tokens = splitPlaceholder(inner);
                     if (tokens.length === 0) continue;
@@ -1292,6 +1298,24 @@ async function buildSchemaFromTemplate(tplPath) {
 // -------------------------------------------------------
 // Routes
 // -------------------------------------------------------
+function cellValueToString(v) {
+    if (v == null) return null;
+    if (typeof v === "string") return v;
+
+    // exceljs richText
+    if (typeof v === "object" && Array.isArray(v.richText)) {
+        return v.richText.map(r => r.text || "").join("");
+    }
+
+    // formula result (กันไว้)
+    if (typeof v === "object" && v && "result" in v) {
+        const r = v.result;
+        if (r == null) return null;
+        return String(r);
+    }
+
+    return null;
+}
 
 router.get('/health', (req, res) => {
     res.json({ ok: true });
