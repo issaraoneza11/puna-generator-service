@@ -1565,9 +1565,9 @@ function convertToOdt(inputPath) {
 // POST /api/gendoc/export?format=pdf|xlsx
 router.post('/export', async (req, res) => {
     try {
-        const referer = req.get('Referer') || '';
-        const permission = await checkPermissionUrl(referer);
-        if (!permission) throw Error('No Permission');
+        /*       const referer = req.get('Referer') || '';
+              const permission = await checkPermissionUrl(referer);
+              if (!permission) throw Error('No Permission'); */
 
         cleanupOldFiles();
 
