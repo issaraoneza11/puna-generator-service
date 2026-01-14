@@ -1501,6 +1501,67 @@ router.post('/schema/upload', async (req, res) => {
     }
 });
 
+
+function toCsvCell(v) {
+    const s = (v === null || v === undefined) ? '' : String(v);
+    // escape double quotes
+    const escaped = s.replace(/"/g, '""');
+    // wrap if has comma, quote, newline
+    if (/[",\n\r]/.test(escaped)) return `"${escaped}"`;
+    return escaped;
+}
+
+function buildCsvFromIndexedObject(obj) {
+    // obj = { "0": {...}, "1": {...}, start_date:"", ... }
+    const rows = [];
+    const keysNumeric = Object.keys(obj || {}).filter(k => /^\d+$/.test(k)).sort((a, b) => Number(a) - Number(b));
+    if (keysNumeric.length === 0) return { csv: '\ufeff', rowCount: 0, columns: [] };
+
+    // union columns ตามลำดับที่เจอ (stable)
+    const colSet = new Set();
+    for (const k of keysNumeric) {
+        const r = obj[k];
+        if (r && typeof r === 'object' && !Array.isArray(r)) {
+            for (const ck of Object.keys(r)) colSet.add(ck);
+        }
+    }
+    const columns = Array.from(colSet);
+
+    // header
+    rows.push(columns.map(toCsvCell).join(','));
+
+    // body
+    for (const k of keysNumeric) {
+        const r = obj[k] || {};
+        rows.push(columns.map(c => toCsvCell(r[c])).join(','));
+    }
+
+    // BOM + join
+    const csv = '\ufeff' + rows.join('\r\n');
+    return { csv, rowCount: keysNumeric.length, columns };
+}
+function convertToOdt(inputPath) {
+    const outDir = path.dirname(inputPath);
+
+    return new Promise((resolve, reject) => {
+        const args = [
+            '--headless', '--nologo', '--nolockcheck', '--nodefault', '--norestore',
+            '--convert-to', 'odt', '--outdir', outDir, inputPath,
+        ];
+
+        const p = spawn(SOFFICE, args, { stdio: 'ignore' });
+        p.on('error', reject);
+        p.on('exit', code => {
+            if (code !== 0) return reject(new Error('soffice exit ' + code));
+
+            const base = path.basename(inputPath).replace(/\.[^.]+$/, '');
+            const odtPath = path.join(outDir, `${base}.odt`);
+
+            if (!fs.existsSync(odtPath)) return reject(new Error('ODT not found after convert'));
+            resolve(odtPath);
+        });
+    });
+}
 // POST /api/gendoc/export?format=pdf|xlsx
 router.post('/export', async (req, res) => {
     try {
@@ -1513,10 +1574,19 @@ router.post('/export', async (req, res) => {
         const raw = req.body || {};
         const data = Array.isArray(raw) ? { items: raw } : raw;
 
-        // format จาก query (pdf/xlsx) ค่า default = pdf
         const format = String(req.query.format || 'pdf').toLowerCase();
-        if (!['pdf', 'xlsx'].includes(format)) {
-            return res.status(400).json({ error: 'Invalid format (use pdf or xlsx)' });
+        if (!['pdf', 'xlsx', 'csv', 'odt'].includes(format)) {
+            return res.status(400).json({ error: 'Invalid format (use pdf, xlsx, csv, odt)' });
+        }
+
+        // ✅ CSV: ไม่ต้องใช้ template / ไม่ต้องสร้างไฟล์อื่น
+        if (format === 'csv') {
+            const source = (data && typeof data.data === 'object') ? data.data : data;
+            const { csv } = buildCsvFromIndexedObject(source);
+
+            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.csv"`);
+            return res.send(csv);
         }
 
         // options
@@ -1539,7 +1609,7 @@ router.post('/export', async (req, res) => {
         // 1) fill xlsx
         const xlsxPath = await fillXlsx(tplPath, data);
 
-        // ถ้าขอ excel ก็ส่งเลย
+        // ✅ XLSX
         if (format === 'xlsx') {
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
             res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.xlsx"`);
@@ -1563,7 +1633,7 @@ router.post('/export', async (req, res) => {
             return stream.pipe(res);
         }
 
-        // 2) ขอ pdf
+        // 2) ทำ pdf (ใช้ร่วมกันทั้ง pdf และ odt)
         const pdfPath = await convertToPdf(xlsxPath);
         let finalPdf = pdfPath;
 
@@ -1573,6 +1643,36 @@ router.post('/export', async (req, res) => {
             });
         }
 
+        // ✅ ODT (ทำหลังได้ finalPdf แล้ว)
+        if (format === 'odt') {
+            const odtPath = await convertToOdt(finalPdf);
+
+            res.setHeader('Content-Type', 'application/vnd.oasis.opendocument.text');
+            res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.odt"`);
+
+            let cleaned = false;
+            const cleanup = () => {
+                if (cleaned) return;
+                cleaned = true;
+                fs.unlink(xlsxPath, () => { });
+                fs.unlink(pdfPath, () => { });
+                if (finalPdf !== pdfPath) fs.unlink(finalPdf, () => { });
+                fs.unlink(odtPath, () => { });
+            };
+
+            res.on('finish', cleanup);
+            res.on('close', cleanup);
+
+            const stream = fs.createReadStream(odtPath);
+            stream.on('error', (err) => {
+                cleanup();
+                if (!res.headersSent) res.status(500).json({ error: err.message });
+                else res.destroy();
+            });
+            return stream.pipe(res);
+        }
+
+        // ✅ PDF
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.pdf"`);
 
@@ -1594,13 +1694,14 @@ router.post('/export', async (req, res) => {
             if (!res.headersSent) res.status(500).json({ error: err.message });
             else res.destroy();
         });
-        stream.pipe(res);
+        return stream.pipe(res);
 
     } catch (e) {
         console.error(e);
         res.status(500).json({ error: e.message });
     }
 });
+
 
 
 // -------------------------------------------------------
