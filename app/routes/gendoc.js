@@ -30,22 +30,49 @@ async function checkPermissionUrl(url) {
     }
 }
 const TEMPLATE_TTL_MS = 6 * 60 * 60 * 1000;
+const TMP_DIR = path.join(os.tmpdir(), 'gendoc_templates');
+
+function ensureTmpDir() {
+    if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
+}
+
 function cleanupOldTemplates(prefix = 'tpl_', ttlMs = TEMPLATE_TTL_MS) {
-    const dir = os.tmpdir();
+    ensureTmpDir();
     const now = Date.now();
     try {
-        const files = fs.readdirSync(dir);
+        const files = fs.readdirSync(TMP_DIR);
         for (const f of files) {
             if (!f.startsWith(prefix) || !f.endsWith('.xlsx')) continue;
-            const full = path.join(dir, f);
+            const full = path.join(TMP_DIR, f);
             try {
                 const st = fs.statSync(full);
-                const age = now - st.mtimeMs;
-                if (age > ttlMs) fs.unlinkSync(full);
+                if (now - st.mtimeMs > ttlMs) fs.unlinkSync(full);
             } catch { }
         }
     } catch { }
 }
+function cleanupOldFiles(ttlMs = TEMPLATE_TTL_MS) {
+    ensureTmpDir();
+    const now = Date.now();
+
+    try {
+        const files = fs.readdirSync(TMP_DIR);
+        for (const f of files) {
+            // ลบเฉพาะไฟล์ที่เราสร้างเอง
+            const okPrefix = f.startsWith('tpl_') || f.startsWith('filled_');
+            const okExt = f.endsWith('.xlsx') || f.endsWith('.pdf');
+
+            if (!okPrefix || !okExt) continue;
+
+            const full = path.join(TMP_DIR, f);
+            try {
+                const st = fs.statSync(full);
+                if (now - st.mtimeMs > ttlMs) fs.unlinkSync(full);
+            } catch { }
+        }
+    } catch { }
+}
+
 
 function resolvePathWithState(obj, pathStr) {
     if (obj == null) return { value: "", state: "NOT_FOUND" };
@@ -93,7 +120,8 @@ const TEMPLATE_XLSX = path.join(__dirname, '..', 'templates', 'template.xlsx');
 
 // ใช้เก็บไฟล์ template ที่ upload
 function getTemplatePathFromId(templateId) {
-    return path.join(os.tmpdir(), `${templateId}.xlsx`);
+    ensureTmpDir();
+    return path.join(TMP_DIR, `${templateId}.xlsx`);
 }
 // ===== LibreOffice =====
 const SOFFICE = process.platform === 'win32'
@@ -360,8 +388,7 @@ function normalizeKeyForStyle(path) {
     return String(path || '').replace(/\[\d+\]/g, '[]');
 }
 function replaceTokensInCell(cell, data, defaultStyleByKey) {
-    const text = cellValueToString(cell.value);
-    if (text == null) return
+    if (typeof cell.value !== 'string') return;
 
     let hasArrayToken = false;
     let hasExplicitStyle = false;            // ✅ เพิ่ม
@@ -369,7 +396,6 @@ function replaceTokensInCell(cell, data, defaultStyleByKey) {
     let lastExplicitStyleTokens = null;
     const useStyleCache = !!cell._fromArrayTemplate;
     // ✅ มีสิทธิ์ใช้ cache เฉพาะ cell ที่มาจาก expand array เท่านั้น
-    cell.value = text;
     cell.value = cell.value.replace(/{{\s*([^{}]+?)\s*}}/g, (_, inner) => {
         const tokens = splitPlaceholder(inner);
         if (!tokens.length) return '';
@@ -670,9 +696,7 @@ function findArrayNamesInRow(row) {
     const found = new Set();
 
     row.eachCell({ includeEmpty: true }, (cell) => {
-        const text = cellValueToString(cell.value);
-        if (text == null) return;
-        cell.value = text;
+        if (typeof cell.value !== 'string') return;
 
         const re = /{{\s*([^{}]+?)\s*}}/g;
         let m;
@@ -720,9 +744,9 @@ function expandArrayRows(ws, data) {
 
         // ✅ normalize: [i] -> [0] ทั้งแถว (ครอบคลุมทุก array)
         templateRow.eachCell({ includeEmpty: true }, (c) => {
-            const t = cellValueToString(c.value);
-            if (t != null) c.value = t.replace(/\[i\]/g, '[0]');
+            if (typeof c.value === 'string') c.value = c.value.replace(/\[i\]/g, '[0]');
         });
+
         // ถ้า maxLen = 1 ไม่ต้อง insert row เพิ่ม แค่ normalize ก็พอ
         if (maxLen <= 1) continue;
 
@@ -766,8 +790,7 @@ function expandArrayRows(ws, data) {
 
 function assertNoILeft(ws) {
     ws.eachRow(r => r.eachCell({ includeEmpty: true }, c => {
-        const t = cellValueToString(c.value);
-        if (t && /\[i\]/.test(t)) {
+        if (typeof c.value === 'string' && /\[i\]/.test(c.value)) {
             throw new Error(`Found [i] left at ${ws.name}!${c.address}: ${c.value}`);
         }
     }));
@@ -1112,8 +1135,9 @@ async function fillXlsx(tplPath, data) {
             });
         });
     });
+    ensureTmpDir();
+    const outXlsx = path.join(TMP_DIR, `filled_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.xlsx`);
 
-    const outXlsx = path.join(os.tmpdir(), `filled_${Date.now()}.xlsx`);
     await wb.xlsx.writeFile(outXlsx);
     return outXlsx;
 }
@@ -1123,29 +1147,31 @@ async function fillXlsx(tplPath, data) {
 // -------------------------------------------------------
 function convertToPdf(xlsxPath) {
     const outDir = path.dirname(xlsxPath);
+
     return new Promise((resolve, reject) => {
         const args = [
-            '--headless',
-            '--nologo',
-            '--nolockcheck',
-            '--nodefault',
-            '--norestore',
-            '--convert-to',
-            'pdf',
-            '--outdir',
-            outDir,
-            xlsxPath,
+            '--headless', '--nologo', '--nolockcheck', '--nodefault', '--norestore',
+            '--convert-to', 'pdf', '--outdir', outDir, xlsxPath,
         ];
+
         const p = spawn(SOFFICE, args, { stdio: 'ignore' });
+
+        p.on('error', reject);
+
         p.on('exit', code => {
             if (code !== 0) return reject(new Error('soffice exit ' + code));
+
             const base = path.basename(xlsxPath).replace(/\.[^.]+$/, '');
             const pdfPath = path.join(outDir, `${base}.pdf`);
-            if (!fs.existsSync(pdfPath)) return reject(new Error('PDF not found after convert'));
+
+            if (!fs.existsSync(pdfPath)) {
+                return reject(new Error('PDF not found after convert'));
+            }
             resolve(pdfPath);
         });
     });
 }
+
 
 async function addPageNumbers(pdfPath, options = {}) {
     const bytes = fs.readFileSync(pdfPath);
@@ -1238,12 +1264,11 @@ async function buildSchemaFromTemplate(tplPath) {
     wb.eachSheet(ws => {
         ws.eachRow(row =>
             row.eachCell(cell => {
-                const text = cellValueToString(cell.value);
-                if (text == null) return;
+                if (typeof cell.value !== 'string') return;
 
                 const re = /{{\s*([^{}]+?)\s*}}/g;
                 let m;
-                while ((m = re.exec(text))) {
+                while ((m = re.exec(cell.value))) {
                     const inner = m[1];
                     const tokens = splitPlaceholder(inner);
                     if (tokens.length === 0) continue;
@@ -1298,24 +1323,6 @@ async function buildSchemaFromTemplate(tplPath) {
 // -------------------------------------------------------
 // Routes
 // -------------------------------------------------------
-function cellValueToString(v) {
-    if (v == null) return null;
-    if (typeof v === "string") return v;
-
-    // exceljs richText
-    if (typeof v === "object" && Array.isArray(v.richText)) {
-        return v.richText.map(r => r.text || "").join("");
-    }
-
-    // formula result (กันไว้)
-    if (typeof v === "object" && v && "result" in v) {
-        const r = v.result;
-        if (r == null) return null;
-        return String(r);
-    }
-
-    return null;
-}
 
 router.get('/health', (req, res) => {
     res.json({ ok: true });
@@ -1372,7 +1379,7 @@ router.post('/render', async (req, res) => {
         if (!permission) {
             throw Error('No Permission');
         }
-        cleanupOldTemplates();
+        cleanupOldFiles();
         const raw = req.body || {};
         const data = Array.isArray(raw) ? { items: raw } : raw;
 
@@ -1434,7 +1441,7 @@ router.post('/render', async (req, res) => {
 // รับไฟล์ Excel แล้วคืน schema + templateId
 router.post('/schema/upload', async (req, res) => {
     try {
-        cleanupOldTemplates();
+        cleanupOldFiles();
         const referer = req.get('Referer') || '';
         let permission = await checkPermissionUrl(referer);
         if (!permission) {
@@ -1494,6 +1501,106 @@ router.post('/schema/upload', async (req, res) => {
     }
 });
 
+// POST /api/gendoc/export?format=pdf|xlsx
+router.post('/export', async (req, res) => {
+    try {
+        const referer = req.get('Referer') || '';
+        const permission = await checkPermissionUrl(referer);
+        if (!permission) throw Error('No Permission');
+
+        cleanupOldFiles();
+
+        const raw = req.body || {};
+        const data = Array.isArray(raw) ? { items: raw } : raw;
+
+        // format จาก query (pdf/xlsx) ค่า default = pdf
+        const format = String(req.query.format || 'pdf').toLowerCase();
+        if (!['pdf', 'xlsx'].includes(format)) {
+            return res.status(400).json({ error: 'Invalid format (use pdf or xlsx)' });
+        }
+
+        // options
+        const opt = {
+            pageNumber: true,
+            pageNumberPosition: 'bottom-center',
+            ...(data.__options || {}),
+        };
+
+        if (!data.__templateId) {
+            return res.status(400).json({ error: 'No template selected (__templateId missing)' });
+        }
+
+        const tplPath = getTemplatePathFromId(data.__templateId);
+        if (!fs.existsSync(tplPath)) {
+            return res.status(400).json({ error: 'Template file not found' });
+        }
+        touchFile(tplPath);
+
+        // 1) fill xlsx
+        const xlsxPath = await fillXlsx(tplPath, data);
+
+        // ถ้าขอ excel ก็ส่งเลย
+        if (format === 'xlsx') {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.xlsx"`);
+
+            let cleaned = false;
+            const cleanup = () => {
+                if (cleaned) return;
+                cleaned = true;
+                fs.unlink(xlsxPath, () => { });
+            };
+
+            res.on('finish', cleanup);
+            res.on('close', cleanup);
+
+            const stream = fs.createReadStream(xlsxPath);
+            stream.on('error', (err) => {
+                cleanup();
+                if (!res.headersSent) res.status(500).json({ error: err.message });
+                else res.destroy();
+            });
+            return stream.pipe(res);
+        }
+
+        // 2) ขอ pdf
+        const pdfPath = await convertToPdf(xlsxPath);
+        let finalPdf = pdfPath;
+
+        if (opt.pageNumber !== false) {
+            finalPdf = await addPageNumbers(pdfPath, {
+                pageNumberPosition: opt.pageNumberPosition,
+            });
+        }
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="export_${Date.now()}.pdf"`);
+
+        let cleaned = false;
+        const cleanup = () => {
+            if (cleaned) return;
+            cleaned = true;
+            fs.unlink(xlsxPath, () => { });
+            fs.unlink(pdfPath, () => { });
+            if (finalPdf !== pdfPath) fs.unlink(finalPdf, () => { });
+        };
+
+        res.on('finish', cleanup);
+        res.on('close', cleanup);
+
+        const stream = fs.createReadStream(finalPdf);
+        stream.on('error', (err) => {
+            cleanup();
+            if (!res.headersSent) res.status(500).json({ error: err.message });
+            else res.destroy();
+        });
+        stream.pipe(res);
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 
 // -------------------------------------------------------
