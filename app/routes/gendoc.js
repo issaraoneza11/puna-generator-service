@@ -1330,11 +1330,11 @@ router.get('/health', (req, res) => {
 
 router.get('/schema', async (req, res) => {
     try {
-        const referer = req.get('Referer') || '';
-        let permission = await checkPermissionUrl(referer);
-        if (!permission) {
-            throw Error('No Permission');
-        }
+        /*   const referer = req.get('Referer') || '';
+          let permission = await checkPermissionUrl(referer);
+          if (!permission) {
+              throw Error('No Permission');
+          } */
         /* if (!fs.existsSync(TEMPLATE_XLSX)) {
             return res.status(500).json({ error: 'Template missing' });
         }
@@ -1442,11 +1442,11 @@ router.post('/render', async (req, res) => {
 router.post('/schema/upload', async (req, res) => {
     try {
         cleanupOldFiles();
-        const referer = req.get('Referer') || '';
-        let permission = await checkPermissionUrl(referer);
-        if (!permission) {
-            throw Error('No Permission');
-        }
+        /*    const referer = req.get('Referer') || '';
+           let permission = await checkPermissionUrl(referer);
+           if (!permission) {
+               throw Error('No Permission');
+           } */
 
         // ถ้าใช้ express-fileupload ใน app.js มันจะยัดไฟล์ไว้ที่นี่
         if (!req.files || !req.files.file) {
